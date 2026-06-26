@@ -91,21 +91,76 @@ uci commit wireless
 
 # ── rate limiting via nftables ─────────────────────────────────────────────────
 # tc tbf isn't available (kmod-sched-core not packaged); use nft drop instead.
-# Convert RATE_LIMIT (e.g. "1mbit") to kbytes/second for nft.
 # nft uses bytes/second: 1mbit = 125 kbytes/second.
-_rate_kbps=$(echo "$RATE_LIMIT" | sed 's/mbit$//; s/[Mm]bit$//' )
+_rate_kbps=$(echo "$RATE_LIMIT" | sed 's/[Mm]bit$//')
 _rate_kbytes=$(( _rate_kbps * 125 ))
 
-NFT_RATE_SCRIPT=/etc/nftables.d/20-untrusted-ratelimit.nft
 mkdir -p /etc/nftables.d
-# Included inside table inet fw4 by fw4, so chain syntax (no 'add rule' prefix).
-cat >"$NFT_RATE_SCRIPT" <<EOF
+# Included inside table inet fw4 by fw4: chain syntax, no 'add rule' prefix.
+cat >/etc/nftables.d/20-untrusted-ratelimit.nft <<EOF
 chain untrusted_ratelimit {
     type filter hook forward priority 1; policy accept;
     iifname "br-${IFACE}" limit rate over ${_rate_kbytes} kbytes/second drop
     oifname "br-${IFACE}" limit rate over ${_rate_kbytes} kbytes/second drop
 }
 EOF
+
+# ── device allowlist (MAC → IP) ────────────────────────────────────────────────
+# Bridge-family nftables not available on this platform (kmod not compiled in).
+# Two-layer approach: DHCP ignores unlisted MACs; nft blocks forwarding from
+# unlisted IPs even if a device sets one manually.
+
+MAC_FILE=/etc/untrusted-allowed-macs
+
+# Create template if it doesn't exist yet.
+if [ ! -f "$MAC_FILE" ]; then
+  cat >"$MAC_FILE" <<'MACEOF'
+# Devices allowed on the untrusted network.
+# Format: mac  ip  description
+# The IP becomes a static DHCP lease; add it within the DHCP range.
+# Devices not listed here get no DHCP lease and are blocked from forwarding.
+# Example:
+# aa:bb:cc:dd:ee:ff  192.168.2.100  Nest Protect Living Room
+MACEOF
+fi
+
+cat >/etc/nftables.d/21-untrusted-allowlist.nft <<EOF
+set untrusted_allowed_ips {
+    type ipv4_addr
+}
+
+chain untrusted_allowlist {
+    type filter hook forward priority -1; policy accept;
+    iifname "br-${IFACE}" ip saddr != @untrusted_allowed_ips drop
+}
+EOF
+
+# Hotplug: re-read the MAC file on every ifup to populate the nft set and
+# regenerate the dnsmasq static-lease + dhcp-ignore config.
+cat >/etc/hotplug.d/iface/51-untrusted-macfilter <<'EOF'
+#!/bin/sh
+[ "$ACTION" = ifup ] || exit 0
+[ "$INTERFACE" = untrusted ] || exit 0
+
+MAC_FILE=/etc/untrusted-allowed-macs
+DNSMASQ_CONF=/etc/dnsmasq.d/untrusted-macfilter.conf
+
+nft flush set inet fw4 untrusted_allowed_ips 2>/dev/null || true
+: >"$DNSMASQ_CONF"
+
+_any=0
+while read -r mac ip rest; do
+    case "$mac" in '#'*|'') continue ;; esac
+    printf 'dhcp-host=%s,set:untrusted_ok,%s\n' "$mac" "$ip" >>"$DNSMASQ_CONF"
+    nft add element inet fw4 untrusted_allowed_ips "{ $ip }" 2>/dev/null
+    _any=1
+done <"$MAC_FILE"
+
+[ "$_any" = 1 ] && printf 'dhcp-ignore=tag:!untrusted_ok\n' >>"$DNSMASQ_CONF"
+
+/etc/init.d/dnsmasq reload
+EOF
+chmod 0755 /etc/hotplug.d/iface/51-untrusted-macfilter
 
 # ── apply ──────────────────────────────────────────────────────────────────────
 
@@ -122,3 +177,4 @@ echo "  DNS:       $DNS_SERVER (via DHCP option 6, bypass blocked)"
 echo "  Wireless:  $SSID on UCI '$WIFI_UCI' (WPA/WPA2, $IFACE bridge)"
 echo "  Rate:      $RATE_LIMIT cap (nft drop) on br-${IFACE}"
 echo "  Firewall:  ${IFACE}→WAN yes  |  ${IFACE}→LAN no  |  ${IFACE}→router no"
+echo "  Allowlist: edit $MAC_FILE, then run /etc/hotplug.d/iface/51-untrusted-macfilter ifup untrusted"
