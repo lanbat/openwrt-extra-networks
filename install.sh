@@ -33,7 +33,20 @@ ISOLATE="${ISOLATE:-yes}"
 DOT="${DOT:-no}"
 ALLOWED_PORTS="${ALLOWED_PORTS:-}"
 NOTIFY_URL="${NOTIFY_URL:-}"
+DEFAULT_DURATION="${DEFAULT_DURATION:-24h}"
+MAX_DURATION="${MAX_DURATION:-30d}"
+REASON_REQUIRED="${REASON_REQUIRED:-no}"
+BANDWIDTH_THRESHOLD_MB="${BANDWIDTH_THRESHOLD_MB:-0}"
 MDNS="${MDNS:-no}"
+VLAN_ID="${VLAN_ID:-}"
+VLAN_TRUNK="${VLAN_TRUNK:-}"
+
+if [ -n "$VLAN_ID" ]; then
+    printf '%s' "$VLAN_ID" | grep -qE '^[1-9][0-9]{0,3}$' \
+        && [ "$VLAN_ID" -le 4094 ] 2>/dev/null \
+        || { echo "ERROR: VLAN_ID must be 1–4094"; exit 1; }
+    [ -z "$VLAN_TRUNK" ] && { echo "ERROR: VLAN_TRUNK must be set when VLAN_ID is set"; exit 1; }
+fi
 
 # ── network ──────────────────────────────────────────────────────────────────
 
@@ -42,6 +55,17 @@ uci -q delete network."br_${IFACE}" || true
 uci set network."br_${IFACE}"=device
 uci set network."br_${IFACE}".name="br-${IFACE}"
 uci set network."br_${IFACE}".type=bridge
+
+# VLAN trunk — bridge a tagged wired port (e.g. eth0.20) into this network alongside WiFi.
+uci -q delete network."${IFACE}_vdev" || true
+if [ -n "$VLAN_ID" ] && [ -n "$VLAN_TRUNK" ]; then
+    uci set network."${IFACE}_vdev"=device
+    uci set network."${IFACE}_vdev".name="${VLAN_TRUNK}.${VLAN_ID}"
+    uci set network."${IFACE}_vdev".type=8021q
+    uci set network."${IFACE}_vdev".ifname="${VLAN_TRUNK}"
+    uci set network."${IFACE}_vdev".vid="${VLAN_ID}"
+    uci add_list network."br_${IFACE}".ports="${VLAN_TRUNK}.${VLAN_ID}"
+fi
 
 uci -q delete network."$IFACE" || true
 uci set network."$IFACE"=interface
@@ -90,6 +114,14 @@ if [ "$IPV6" = yes ]; then
         esac
     fi
 fi
+
+# Register this interface with dnsmasq's listener list (idempotent).
+# Without this, dnsmasq's bind-dynamic mode silently skips DHCP on the bridge.
+_dm_ifaces=$(uci -q get dhcp.@dnsmasq[0].interface 2>/dev/null || true)
+case " $_dm_ifaces " in
+    *" $IFACE "*) ;;
+    *) uci add_list dhcp.@dnsmasq[0].interface="$IFACE" ;;
+esac
 
 uci commit dhcp
 
@@ -279,6 +311,7 @@ set ${IFACE}_allowed_ips {
 
 chain ${IFACE}_allowlist {
     type filter hook forward priority -1; policy accept;
+    iifname "br-${IFACE}" ip saddr != @${IFACE}_allowed_ips ct state new limit rate 3/minute log prefix "EXTNET-DENY-${IFACE}: " level info
     iifname "br-${IFACE}" ip saddr != @${IFACE}_allowed_ips drop
 }
 EOF
@@ -302,7 +335,7 @@ while read -r mac ip rest; do
     _any=1
 done <"\$MAC_FILE"
 
-[ "\$_any" = 1 ] && printf 'dhcp-ignore=tag:!${IFACE}_ok\n' >>"\$DNSMASQ_CONF"
+[ "\$_any" = 1 ] && printf 'dhcp-ignore=tag:${IFACE},tag:!${IFACE}_ok\n' >>"\$DNSMASQ_CONF"
 
 /etc/init.d/dnsmasq reload
 EOF
@@ -355,53 +388,91 @@ chain ${IFACE}_counter {
 }
 EOF
 
+# Per-device byte tracking (used by bandwidth-check.sh and the status dashboard).
+# Created when NOTIFY_URL is set; removed when it is unset.
+rm -f /etc/nftables.d/26-${IFACE}-device-track.nft
+if [ -n "$NOTIFY_URL" ]; then
+    cat >/etc/nftables.d/26-${IFACE}-device-track.nft <<EOF
+set ${IFACE}_device_bytes {
+    type ipv4_addr
+    flags dynamic, timeout
+    timeout 24h
+    counter
+}
+
+set ${IFACE}_device_bytes6 {
+    type ipv6_addr
+    flags dynamic, timeout
+    timeout 24h
+    counter
+}
+
+chain ${IFACE}_device_track {
+    type filter hook forward priority 1; policy accept;
+    iifname "br-${IFACE}" update @${IFACE}_device_bytes  { ip  saddr }
+    iifname "br-${IFACE}" update @${IFACE}_device_bytes6 { ip6 saddr }
+}
+EOF
+fi
+
 # ── device notifications ───────────────────────────────────────────────────────
-# When NOTIFY_URL is set, dnsmasq calls /usr/sbin/dhcp-notify on each new lease.
-# ntfy.sh is the simplest backend: NOTIFY_URL=https://ntfy.sh/my-unique-topic
+# The notify.conf is always written — the status dashboard reads it even when
+# NOTIFY_URL is unset. NOTIFY_URL-dependent features (dhcp hook, CGIs, crons)
+# are only set up when NOTIFY_URL is provided.
+
+printf 'SUBNET=%s\nNOTIFY_URL=%s\nIFACE_NAME=%s\nDEFAULT_DURATION=%s\nMAX_DURATION=%s\nREASON_REQUIRED=%s\nBANDWIDTH_THRESHOLD_MB=%s\nRATE_LIMIT=%s\nRATE_LIMIT_PER_DEVICE=%s\nDNS_SERVER=%s\nISOLATE=%s\nLAN_ACCESS=%s\nDOT=%s\n' \
+    "$SUBNET" "$NOTIFY_URL" "$IFACE" \
+    "$DEFAULT_DURATION" "$MAX_DURATION" "$REASON_REQUIRED" "$BANDWIDTH_THRESHOLD_MB" \
+    "${RATE_LIMIT:-}" "${RATE_LIMIT_PER_DEVICE:-}" "$DNS_SERVER" "$ISOLATE" "${LAN_ACCESS:-no}" "$DOT" \
+    >"${BASE_DIR}/${IFACE}-notify.conf"
+
+# Idempotently set a cron entry identified by tag (remove old, add new).
+_cron_set() { ( crontab -l 2>/dev/null | grep -vF "# $1"; echo "$2  # $1" ) | crontab -; }
+
+cp "${SCRIPT_DIR}/tools/_lib.sh" "${BASE_DIR}/_lib.sh"
 
 if [ -n "$NOTIFY_URL" ]; then
-    printf 'SUBNET=%s\nNOTIFY_URL=%s\nIFACE_NAME=%s\n' \
-        "$SUBNET" "$NOTIFY_URL" "$IFACE" >"${BASE_DIR}/${IFACE}-notify.conf"
-
     cat >"${BASE_DIR}/dhcp-notify" <<'NOTIFYEOF'
 #!/bin/sh
 [ "$1" = add ] || exit 0
 _mac="$2"; _ip="$3"; _host="${4:-unknown}"
+. /etc/extra-networks/_lib.sh
 for _conf in /etc/extra-networks/*-notify.conf; do
     [ -f "$_conf" ] || continue
     unset SUBNET NOTIFY_URL IFACE_NAME
     . "$_conf"
+    [ -n "${NOTIFY_URL:-}" ] || continue
     case "$_ip" in "$SUBNET".*) ;; *) continue ;; esac
-    curl -sf -X POST "$NOTIFY_URL" \
-        -H "Title: New device — $IFACE_NAME" \
-        -H "Priority: low" \
-        -d "${_host} (${_mac}) joined at ${_ip}" >/dev/null &
+    _ntfy "New device — $IFACE_NAME" low "" \
+"Type: New device
+
+${_host} (${_mac}) joined ${IFACE_NAME} at ${_ip}."
 done
 NOTIFYEOF
     chmod 0755 "${BASE_DIR}/dhcp-notify"
     uci set dhcp.@dnsmasq[0].dhcpscript="${BASE_DIR}/dhcp-notify"
     uci commit dhcp
 
-    # Install approval CGI and enable uhttpd CGI support
+    # Install CGIs and enable uhttpd CGI support
     mkdir -p /www/cgi-bin
     cp "${SCRIPT_DIR}/tools/approve-access.cgi" /www/cgi-bin/approve-access
-    chmod 0755 /www/cgi-bin/approve-access
+    cp "${SCRIPT_DIR}/tools/status.cgi"         /www/cgi-bin/status
+    chmod 0755 /www/cgi-bin/approve-access /www/cgi-bin/status
     if ! uci -q get uhttpd.main.cgi_prefix >/dev/null 2>&1; then
         uci set uhttpd.main.cgi_prefix=/cgi-bin
         uci commit uhttpd
         /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
     fi
 
-    # Cron: check access log every minute for blocked LAN→zone attempts
-    ( crontab -l 2>/dev/null | grep -v '# extra-networks-monitor' ) | crontab -
-    ( crontab -l 2>/dev/null
-      echo "* * * * * sh ${SCRIPT_DIR}/tools/check-access-log.sh  # extra-networks-monitor"
-    ) | crontab -
+    _cron_set extra-networks-monitor  "* * * * * sh ${SCRIPT_DIR}/tools/check-access-log.sh"
+    _cron_set extra-networks-reboot   "@reboot sleep 30 && sh ${SCRIPT_DIR}/tools/notify-reboot.sh"
+    _cron_set extra-networks-digest   "0 8 * * * sh ${SCRIPT_DIR}/tools/digest.sh"
+    _cron_set extra-networks-bwcheck  "0 * * * * sh ${SCRIPT_DIR}/tools/bandwidth-check.sh"
+    _cron_set extra-networks-vpncheck "*/5 * * * * sh ${SCRIPT_DIR}/tools/check-vpn.sh"
 else
-    rm -f "${BASE_DIR}/${IFACE}-notify.conf"
-    # Remove monitor cron only if no other network still has NOTIFY_URL configured
-    if ! ls "${BASE_DIR}"/*-notify.conf >/dev/null 2>&1; then
-        ( crontab -l 2>/dev/null | grep -v '# extra-networks-monitor' ) | crontab -
+    # Remove crons only if no remaining network has NOTIFY_URL configured
+    if ! grep -qE 'NOTIFY_URL=.+' "${BASE_DIR}/"*-notify.conf 2>/dev/null; then
+        ( crontab -l 2>/dev/null | grep -v '# extra-networks-' ) | crontab -
     fi
 fi
 
@@ -458,7 +529,7 @@ if [ "$DOT" = yes ]; then
 else
     echo "  DNS:       ${DNS_SERVER}$([ "$IPV6" = yes ] && [ -n "${DNS_SERVER_V6:-}" ] && echo " / $DNS_SERVER_V6") direct (bypass blocked)"
 fi
-_radios="$RADIO$([ -n "$RADIO_EXTRA" ] && echo " + $RADIO_EXTRA")"
+_radios="${RADIO}${RADIO_EXTRA:+ + ${RADIO_EXTRA}}"
 echo "  Wireless:  $SSID ($ENCRYPTION on $_radios)"
 [ "$_agg" -gt 0 ] && echo "  Rate:      $RATE_LIMIT aggregate"
 [ "$_per" -gt 0 ] && echo "  Rate:      $RATE_LIMIT_PER_DEVICE per device"
@@ -474,5 +545,7 @@ if [ "${ALLOWLIST:-no}" = yes ]; then
 fi
 [ "$ISOLATE" = yes ] && echo "  Isolate:   clients cannot reach each other"
 [ -n "$ALLOWED_PORTS" ] && echo "  Ports:     restricted to $ALLOWED_PORTS + NTP"
+[ -n "$VLAN_ID" ] && echo "  VLAN:      ${VLAN_TRUNK}.${VLAN_ID} bridged into br-${IFACE}"
 [ -n "$NOTIFY_URL" ] && echo "  Notify:    new devices → ntfy"
 [ "$MDNS" = yes ] && echo "  mDNS:      reflecting between LAN and $IFACE"
+true

@@ -28,6 +28,7 @@ PROTO="${5:-tcp udp}"
 NAME="${6:-expose-${ZONE}-${PORT}}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. /etc/extra-networks/_lib.sh
 
 # ── duration parsing ───────────────────────────────────────────────────────────
 
@@ -106,3 +107,10 @@ ZONE_IP=$(ip addr show br-"$ZONE" 2>/dev/null \
           | awk '/inet / { split($2,a,"/"); print a[1]; exit }')
 echo "Exposed:     $ZONE clients → ${ZONE_IP}:${PORT} → ${DEST}:${PORT} ($PROTO)"
 [ "$_secs" -eq 0 ] && echo "Duration:    permanent — remove with: sh unexpose-port.sh $NAME"
+
+_load_notify "$ZONE"
+_ntfy "Port forwarded — ${ZONE}" default electric_plug \
+"Type: Port forwarded
+
+Port ${PORT} (${PROTO}) on ${ZONE} → ${DEST}:${PORT}
+Duration: ${DURATION:-permanent}"

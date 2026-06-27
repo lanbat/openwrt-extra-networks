@@ -6,9 +6,21 @@
 BASE_DIR=/etc/extra-networks
 REPO_DIR=$(awk -F= '/^REPO_DIR/ { print $2 }' "${BASE_DIR}/config" 2>/dev/null)
 ALLOW_SCRIPT="${REPO_DIR}/tools/allow-service.sh"
+. "${BASE_DIR}/_lib.sh"
 
 _get_param() {
     printf '%s' "$1" | tr '&' '\n' | grep "^${2}=" | head -1 | sed "s/^${2}=//"
+}
+
+_urldecode() {
+    printf '%s' "$1" | sed 's/+/ /g' | awk '
+    BEGIN { for(i=0;i<256;i++) h[sprintf("%02X",i)]=h[sprintf("%02x",i)]=sprintf("%c",i) }
+    { s=$0; out=""
+      while(match(s,/%[0-9A-Fa-f][0-9A-Fa-f]/)) {
+        out=out substr(s,1,RSTART-1) h[substr(s,RSTART+1,2)]
+        s=substr(s,RSTART+RLENGTH)
+      }
+      print out s }'
 }
 
 _valid_ip() {
@@ -17,6 +29,15 @@ _valid_ip() {
 
 _html() {
     printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+}
+
+_dur_secs() {
+    case "$1" in
+        *d) printf '%s' $(( ${1%d} * 86400 )) ;;
+        *h) printf '%s' $(( ${1%h} * 3600 )) ;;
+        *m) printf '%s' $(( ${1%m} * 60 )) ;;
+        *)  printf '0' ;;
+    esac
 }
 
 # CSRF: reject POSTs whose Origin/Referer is not a private address.
@@ -32,10 +53,10 @@ fi
 # Read parameters from GET query string or POST body
 if [ "${REQUEST_METHOD:-GET}" = "POST" ] && [ -n "${CONTENT_LENGTH:-}" ]; then
     # Bound CONTENT_LENGTH to prevent hanging on oversized bodies
-    printf '%s' "$CONTENT_LENGTH" | grep -qE '^[0-9]+$' && [ "$CONTENT_LENGTH" -le 1024 ] \
+    printf '%s' "$CONTENT_LENGTH" | grep -qE '^[0-9]+$' && [ "$CONTENT_LENGTH" -le 4096 ] \
         || { printf 'Content-Type: text/html\r\n\r\nBad request'; exit 0; }
     _params=$(head -c "$CONTENT_LENGTH")
-    # Carry GET params too — duration comes from POST, the rest from GET query string
+    # Carry GET params too — duration/reason come from POST, the rest from GET query string
     [ -n "$QUERY_STRING" ] && _params="${QUERY_STRING}&${_params}"
 else
     _params="$QUERY_STRING"
@@ -47,6 +68,7 @@ DST=$(_get_param "$_params" dst)
 PROTO=$(_get_param "$_params" proto)
 PORT=$(_get_param "$_params" port)
 DURATION=$(_get_param "$_params" duration)
+REASON=$(_urldecode "$(_get_param "$_params" reason)")
 
 printf 'Content-Type: text/html\r\n\r\n'
 
@@ -64,25 +86,71 @@ printf '%s' "$NET" | grep -qE '^[a-z][a-z0-9_]*$' \
 uci -q get firewall."${NET}_zone" >/dev/null 2>&1 \
     || { printf '<h1>Unknown network: %s</h1>' "$NET"; exit 0; }
 
-# ── resolve names ─────────────────────────────────────────────────────────────
+# ── load per-network notify config ────────────────────────────────────────────
+
+NOTIFY_URL=""
+DEFAULT_DURATION="24h"
+MAX_DURATION="30d"
+REASON_REQUIRED="no"
+[ -f "${BASE_DIR}/${NET}-notify.conf" ] && . "${BASE_DIR}/${NET}-notify.conf"
+_max_secs=$(_dur_secs "$MAX_DURATION")
+
+# ── resolve names and MACs ────────────────────────────────────────────────────
 
 src_name=$(awk -v ip="$SRC" '$3==ip { print $4; exit }' /tmp/dhcp.leases 2>/dev/null)
 dst_name=$(awk -v ip="$DST" '$3==ip { print $4; exit }' /tmp/dhcp.leases 2>/dev/null)
+src_mac=$(awk  -v ip="$SRC" '$3==ip { print $2; exit }' /tmp/dhcp.leases 2>/dev/null)
+dst_mac=$(awk  -v ip="$DST" '$3==ip { print $2; exit }' /tmp/dhcp.leases 2>/dev/null)
 src_label=$([ -n "$src_name" ] && printf '%s (%s)' "$(_html "$src_name")" "$SRC" || printf '%s' "$SRC")
 dst_label=$([ -n "$dst_name" ] && printf '%s (%s)' "$(_html "$dst_name")" "$DST" || printf '%s' "$DST")
+src_plain=$([ -n "$src_name" ] && printf '%s (%s)' "$src_name" "$SRC" || printf '%s' "$SRC")
+dst_plain=$([ -n "$dst_name" ] && printf '%s (%s)' "$dst_name" "$DST" || printf '%s' "$DST")
 
 QS="net=${NET}&src=${SRC}&dst=${DST}&proto=${PROTO}&port=${PORT}"
 
 # ── POST: execute and confirm ─────────────────────────────────────────────────
 
-if [ "${REQUEST_METHOD:-GET}" = "POST" ] && [ -n "$DURATION" ]; then
-    case "$DURATION" in
+if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
+    case "${DURATION:-}" in
         1h|6h|12h|24h|2d|7d|30d) ;;
         *) printf '<h1>Invalid duration</h1>'; exit 0 ;;
     esac
 
+    if [ "$(_dur_secs "$DURATION")" -gt "$_max_secs" ]; then
+        printf '<h1>Duration exceeds maximum (%s)</h1>' "$(_html "$MAX_DURATION")"; exit 0
+    fi
+
+    if [ "$REASON_REQUIRED" = yes ] && [ -z "$REASON" ]; then
+        cat <<HTML
+<!DOCTYPE html><html><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reason required</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:480px;margin:4rem auto;padding:1rem;color:#111}
+h1{font-size:1.3rem}
+.box{border-radius:8px;padding:.75rem 1rem;margin:1rem 0;background:#fff8e1;font-size:.9rem}
+a{color:#1976d2}
+</style></head><body>
+<h1>Reason required</h1>
+<div class="box">Please go back and enter a reason for this approval.</div>
+<p><a href="/cgi-bin/approve-access?${QS}">Back</a></p>
+</body></html>
+HTML
+        exit 0
+    fi
+
     result=$("$ALLOW_SCRIPT" "$NET" "$DST" "$PROTO" "$PORT" "$DURATION" 2>&1)
     ok=$?
+
+    if [ "$ok" -eq 0 ]; then
+        _ntfy "Approved — ${NET}" default white_check_mark \
+"Type: Access approved
+
+From: ${src_plain}${src_mac:+ [${src_mac}]}
+To:   ${dst_plain}${dst_mac:+ [${dst_mac}]}:${PORT}/${PROTO}
+Duration: ${DURATION}${REASON:+
+Reason: ${REASON}}"
+    fi
 
     cat <<HTML
 <!DOCTYPE html><html><head>
@@ -111,6 +179,18 @@ fi
 
 # ── GET: show approval form ───────────────────────────────────────────────────
 
+_dur_option() {
+    # emit <option> only if the duration does not exceed MAX_DURATION
+    [ "$(_dur_secs "$1")" -le "$_max_secs" ] || return 0
+    [ "$1" = "$DEFAULT_DURATION" ] \
+        && printf '<option value="%s" selected>%s</option>\n' "$1" "$2" \
+        || printf '<option value="%s">%s</option>\n' "$1" "$2"
+}
+
+_required_note=$([ "$REASON_REQUIRED" = yes ] \
+    && printf ' <span style="color:#c62828">*</span>' || true)
+_required_attr=$([ "$REASON_REQUIRED" = yes ] && printf ' required' || true)
+
 cat <<HTML
 <!DOCTYPE html><html><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -121,8 +201,9 @@ h1{font-size:1.3rem;margin-bottom:1.5rem}
 .card{background:#f5f5f5;border-radius:8px;padding:1rem;margin:.75rem 0}
 .label{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:.25rem}
 .value{font-weight:600}
-select{font-size:1rem;padding:.5rem .75rem;border-radius:6px;border:1px solid #ccc;
+select,textarea{font-size:1rem;padding:.5rem .75rem;border-radius:6px;border:1px solid #ccc;
        display:block;width:100%;margin:.5rem 0;box-sizing:border-box}
+textarea{resize:vertical;min-height:4rem}
 button{font-size:1rem;padding:.65rem 1rem;border-radius:6px;border:none;cursor:pointer;
        background:#1976d2;color:#fff;width:100%;margin-top:.5rem}
 button:active{background:#1565c0}
@@ -144,14 +225,20 @@ button:active{background:#1565c0}
 <form method="POST" action="/cgi-bin/approve-access?${QS}">
   <div class="label" style="margin-top:1.25rem">Allow for</div>
   <select name="duration">
-    <option value="1h">1 hour</option>
-    <option value="6h">6 hours</option>
-    <option value="12h">12 hours</option>
-    <option value="24h" selected>24 hours</option>
-    <option value="2d">2 days</option>
-    <option value="7d">1 week</option>
-    <option value="30d">30 days</option>
+HTML
+
+_dur_option 1h  "1 hour"
+_dur_option 6h  "6 hours"
+_dur_option 12h "12 hours"
+_dur_option 24h "24 hours"
+_dur_option 2d  "2 days"
+_dur_option 7d  "1 week"
+_dur_option 30d "30 days"
+
+cat <<HTML
   </select>
+  <div class="label" style="margin-top:1.25rem">Reason${_required_note}</div>
+  <textarea name="reason" placeholder="Why is this access needed?"${_required_attr}></textarea>
   <button type="submit">Allow access</button>
 </form>
 </body></html>

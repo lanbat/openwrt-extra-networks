@@ -18,17 +18,37 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. /etc/extra-networks/_lib.sh
 
 # ── remove ────────────────────────────────────────────────────────────────────
 
 if [ "${1:-}" = remove ]; then
     [ -z "${2:-}" ] && { echo "Usage: sh allow-service.sh remove <rule-name>"; exit 1; }
     RULE="$2"
+
+    # Capture details before deleting so we can include them in the notification
+    _iface=$(uci -q get firewall."$RULE".dest 2>/dev/null || true)
+    _dest_ip=$(uci -q get firewall."$RULE".dest_ip 2>/dev/null || true)
+    _port=$(uci -q get firewall."$RULE".dest_port 2>/dev/null || true)
+    _proto=$(uci -q get firewall."$RULE".proto 2>/dev/null || true)
+
     uci -q delete firewall."$RULE" || { echo "ERROR: rule not found: $RULE"; exit 1; }
     uci commit firewall
     fw4 reload >/dev/null
     ( crontab -l 2>/dev/null | grep -v "# $RULE" ) | crontab -
     echo "Removed: $RULE"
+
+    if [ -n "$_iface" ] && [ -n "$_dest_ip" ]; then
+        _load_notify "$_iface"
+        if [ -n "${NOTIFY_URL:-}" ]; then
+            _dst_name=$(awk -v ip="$_dest_ip" '$3==ip { print $4; exit }' /tmp/dhcp.leases 2>/dev/null)
+            _dst_label="${_dst_name:+${_dst_name} (${_dest_ip})}${_dst_name:-${_dest_ip}}"
+            _ntfy "Access expired — ${_iface}" low clock1 \
+"Type: Access expired
+
+Access to ${_dst_label}:${_port}/${_proto} has expired and been removed."
+        fi
+    fi
     exit 0
 fi
 
@@ -122,3 +142,10 @@ dst_name=$(awk -v ip="$DEST_IP" '$3==ip { print $4; exit }' /tmp/dhcp.leases 2>/
 echo "Allowed:  LAN → ${dst_name:+$dst_name (}${DEST_IP}${dst_name:+)}:${PORT}/${PROTO}"
 echo "Expires:  $_exp_human"
 echo "Remove:   sh $SCRIPT_DIR/allow-service.sh remove $RULE_NAME"
+
+_load_notify "$IFACE"
+_ntfy "Access granted — ${IFACE}" default white_check_mark \
+"Type: Access granted
+
+LAN → ${dst_name:+$dst_name (}${DEST_IP}${dst_name:+)}:${PORT}/${PROTO}
+Duration: ${DURATION} (expires ${_exp_human})"

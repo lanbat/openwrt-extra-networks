@@ -28,8 +28,8 @@ Each network is a config file. Add a new one by copying an example.
 - **MAC allowlist** — for IoT networks: unlisted devices get no lease and are blocked from forwarding
 - **LAN → isolated access** — optionally let LAN devices reach isolated devices, never the reverse
 - **mDNS reflection** — let guests discover shared services (Chromecast, AirPrint) via avahi
-- **Device notifications** — push alert when a new device joins, via ntfy.sh
-- **LAN access approval** — when a LAN device tries to reach something on an isolated network, you get a push notification with an Approve button; tapping it opens a web form on the router to grant temporary access for a chosen duration
+- **Push notifications** — 12 event types via ntfy.sh: new device joined, LAN access request/approval/expiry, allowlist rejection, bandwidth alert, port forwarded/removed, password rotated, daily digest, VPN state change, router reboot
+- **Live status dashboard** — web page on the router showing all networks, connected devices with per-device traffic, VPN status, active LAN access rules, and port forwards
 - **Traffic counters** — bytes in/out per network since last firewall reload, shown in status
 - **Access schedule** — restrict internet to specific hours; auto-blocked outside the window
 - **Temporary port forwarding** — expose a LAN host to guests for a fixed time; auto-removed via cron
@@ -105,8 +105,14 @@ Config files live in `configs/` and are gitignored — they never leave the rout
 |---|---|---|
 | `LAN_ACCESS` | `no` | Allow LAN devices to initiate connections to this network (not vice versa) |
 | `ALLOWLIST` | `no` | MAC allowlist — only listed devices get a lease or can forward traffic |
+| `VLAN_ID` | — | 802.1Q VLAN ID — bridge a tagged wired port into this network alongside WiFi, e.g. `20` |
+| `VLAN_TRUNK` | — | Physical interface carrying the VLAN trunk, e.g. `eth0` — required when `VLAN_ID` is set |
 | `MDNS` | `no` | Reflect mDNS between LAN and this network; installs avahi-daemon if absent |
 | `NOTIFY_URL` | — | ntfy.sh URL — push alert when a new device joins, e.g. `https://ntfy.sh/my-topic` |
+| `DEFAULT_DURATION` | `24h` | Pre-selected duration in the approval form (`1h` `6h` `12h` `24h` `2d` `7d` `30d`) |
+| `MAX_DURATION` | `30d` | Longest duration available in the approval form — options above this are hidden |
+| `REASON_REQUIRED` | `no` | `yes` — approver must enter a reason before access is granted |
+| `BANDWIDTH_THRESHOLD_MB` | `0` | Alert when a device transfers this many MB in a session; `0` to disable |
 
 > `ACCESS_HOURS` is set via `tools/access-schedule.sh`, not in the config file.
 
@@ -150,20 +156,78 @@ mDNS multicast packets are confined to a single subnet — a guest on `192.168.3
 
 ## Device notifications
 
-Set `NOTIFY_URL` to an [ntfy.sh](https://ntfy.sh) topic URL. Two types of notifications are sent automatically:
-
-**New device joined** — when a device gets a DHCP lease, you get a push with its hostname, MAC, and IP.
-
-**LAN access request** — when a LAN device tries to reach something on an isolated network (and is blocked), you get a push with an **Approve** button. Tapping it opens a page on the router where you pick how long to allow access. The rule is temporary and removed automatically when it expires.
+Set `NOTIFY_URL` to an [ntfy.sh](https://ntfy.sh) topic URL. Subscribe in the ntfy app on your phone. Each network can have its own topic.
 
 ```sh
-# In configs/guest.conf:
 NOTIFY_URL=https://ntfy.sh/my-unique-topic-name
 ```
 
-Subscribe to the topic in the ntfy app on your phone. Each isolated network can have its own topic.
+All notifications include a link to the status dashboard. LAN access requests include an **Approve** action button.
 
-The approval page (`http://192.168.1.1/cgi-bin/approve-access`) is only reachable from your home LAN — isolated zones have `INPUT=REJECT` so guests cannot access it.
+| Event | Trigger | Priority |
+|---|---|---|
+| New device joined | Device gets a DHCP lease | Low |
+| LAN access request | LAN device blocked from reaching an isolated device | Default |
+| LAN access approved | Access granted via web form or `allow-service.sh` | Default |
+| LAN access expired | Temporary rule removed by cron | Low |
+| Allowlist rejection | Unlisted device attempts to use the network | High |
+| Bandwidth alert | Device exceeds `BANDWIDTH_THRESHOLD_MB` in a session | Default |
+| Port forwarded | `expose-port.sh` adds a redirect | Default |
+| Port forward removed | Rule expired or `unexpose-port.sh` called | Low |
+| Password rotated | `rotate-password.sh` generates a new key | Default |
+| Daily digest | Traffic totals and device counts, sent at 08:00 | Low |
+| Router reboot | Router comes back online (30s delay) | Low |
+| VPN state change | VPN goes down or recovers | High / Default |
+
+### LAN access approval
+
+When a LAN device is blocked from reaching an isolated device, you get a push with an **Approve** button. Tapping it opens a form on the router where you pick how long to allow access and optionally enter a reason. Once submitted, a second push confirms the approval with both devices' IP, MAC, and hostname.
+
+`DEFAULT_DURATION` pre-selects a duration in the form (default `24h`). `MAX_DURATION` hides longer options. Set `REASON_REQUIRED=yes` to make the reason field mandatory — enforced both client-side and server-side.
+
+The approval page (`/cgi-bin/approve-access`) is only reachable from your home LAN — isolated zones have `INPUT=REJECT`.
+
+### Bandwidth alerts
+
+`BANDWIDTH_THRESHOLD_MB` triggers an alert when a device exceeds that many MB in a session. Counters reset on `fw4 reload` or after 24 hours of inactivity. An IP is only alerted once per session.
+
+### Daily digest
+
+Sent every morning at 08:00 with traffic totals (↓/↑), connected device count, and active LAN access rule count for each network. Also includes VPN status if split-routing is configured.
+
+### VPN monitoring
+
+If `/etc/split-routing/config` is present, VPN state is checked every 5 minutes. A high-priority alert fires when the VPN goes down; a default-priority alert fires when it recovers. Uses the `NOTIFY_URL` from the split-routing config if set, otherwise falls back to the first extra-networks topic.
+
+## Status dashboard
+
+When `NOTIFY_URL` is set, a live web dashboard is installed at:
+
+```
+http://192.168.1.1/cgi-bin/status
+```
+
+The page auto-refreshes every 60 seconds and shows:
+
+- **VPN** — interface and state (up / down / routing fault)
+- **Networks** — state, subnet, traffic (↓/↑), connected devices with hostname, IP, MAC, and per-device traffic
+- **LAN access rules** — active temporary allowances with expiry time
+- **Port forwards** — all active redirects with zone, port, destination, and expiry
+
+Only reachable from LAN — isolated zones have `INPUT=REJECT`.
+
+## VLAN trunk
+
+Set `VLAN_ID` and `VLAN_TRUNK` to bridge a tagged wired port into the network alongside the WiFi SSID. Devices on that VLAN from a managed switch land on the same L2 segment as WiFi clients — same subnet, same firewall rules, same DHCP pool.
+
+```sh
+VLAN_ID=20       # tag used on the switch trunk port
+VLAN_TRUNK=eth0  # physical interface the trunk arrives on (hardware-specific)
+```
+
+The trunk interface name depends on your board — check with `ip link show`. Common values: `eth0`, `eth1`, `lan1`. `install.sh` creates an `8021q` VLAN device (`eth0.20`) and adds it to `br-${IFACE}`; netifd brings it up automatically.
+
+Omit both variables (or leave them blank) for WiFi-only — the feature is entirely opt-in.
 
 ## Tools
 
@@ -173,7 +237,9 @@ The approval page (`http://192.168.1.1/cgi-bin/approve-access`) is only reachabl
 sh tools/status.sh
 ```
 
-Shows all isolated networks with: bridge IP and state, WiFi SSID and encryption, connected clients, DHCP leases, rate limits, traffic counters (since last fw4 reload), access schedule state, active port forwards, and LAN access status.
+CLI summary of all isolated networks: bridge IP and state, WiFi SSID and encryption, connected clients, DHCP leases, rate limits, traffic counters, access schedule state, port forwards, and LAN access status.
+
+When `NOTIFY_URL` is set, a web dashboard is also available at `http://192.168.1.1/cgi-bin/status` — see [Status dashboard](#status-dashboard).
 
 ### Uninstall
 
@@ -209,7 +275,7 @@ sh tools/access-schedule.sh configs/guest.conf status
 
 ### Allow LAN access to a guest device
 
-When `NOTIFY_URL` is set, blocked LAN→isolated connection attempts trigger a push notification with an **Approve** button. Tapping it opens a browser form on the router. You pick the duration and submit — the rule is added immediately and removed automatically when it expires.
+When `NOTIFY_URL` is set, blocked LAN→isolated connection attempts trigger a push notification with an **Approve** button. Tapping it opens a browser form on the router. You pick the duration, optionally enter a reason, and submit — the rule is added immediately and removed automatically when it expires. A confirmation push is sent with both devices' IP, MAC, and hostname, plus the duration and reason.
 
 You can also grant access directly from the command line:
 

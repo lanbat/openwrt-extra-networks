@@ -18,6 +18,7 @@ CONFIG="$1"
 
 WIFI_UCI="${WIFI_UCI:-$IFACE}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. /etc/extra-networks/_lib.sh
 
 NEW_KEY=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 20)
 
@@ -41,3 +42,18 @@ printf 'New password:     %s\n\n' "$NEW_KEY"
 # Print QR code using the updated config
 WIFI_KEY="$NEW_KEY"
 sh "$SCRIPT_DIR/qr.sh" "$CONFIG"
+
+# Regenerate the web QR page so the notification link is current
+_qr_url=""
+if [ -f "$SCRIPT_DIR/guest-info.sh" ] && sh "$SCRIPT_DIR/guest-info.sh" "$CONFIG" >/dev/null 2>&1; then
+    _rip=$(ip addr show br-lan 2>/dev/null | awk '/inet / { split($2,a,"/"); print a[1]; exit }')
+    _qr_url="http://${_rip:-192.168.1.1}/net/${IFACE}.html"
+fi
+
+_load_notify "$IFACE"
+_ntfy "Password rotated — ${SSID:-$IFACE}" default key \
+"Type: Password rotated
+
+New password: ${NEW_KEY}${_qr_url:+
+QR code: ${_qr_url}}" \
+    "${_qr_url:+view, QR code, ${_qr_url}}"

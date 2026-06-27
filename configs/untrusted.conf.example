@@ -8,7 +8,7 @@ IFACE=untrusted
 RADIO=radio0                     # radio0 = 2.4GHz, radio1 = 5GHz
 RADIO_EXTRA=                     # second radio for dual-band (e.g. radio1); leave blank for single-band
 SSID=BTHub6-3K7P
-ENCRYPTION=psk+psk2              # WPA/WPA2 mixed — required for legacy devices
+ENCRYPTION=psk2                  # WPA2; use psk+psk2 only for devices that don't support WPA2
 
 SUBNET=192.168.2                 # router gets .1, clients .100–.249
 RATE_LIMIT=500kbit               # aggregate cap for the whole network; 0 to disable
@@ -21,5 +21,11 @@ ALLOWLIST=yes                    # only listed MACs get internet; see /etc/untru
 ISOLATE=yes                      # clients cannot talk to each other
 DOT=no                           # yes = DNS via https-dns-proxy (encrypted DoT/DoH)
 ALLOWED_PORTS=                   # restrict outbound ports; blank = allow all
+VLAN_ID=                         # 802.1Q VLAN ID to bridge into this network e.g. 20 (blank = WiFi only)
+VLAN_TRUNK=                      # physical trunk interface e.g. eth0 (required when VLAN_ID is set)
 NOTIFY_URL=                      # ntfy.sh URL for new device alerts
+DEFAULT_DURATION=24h             # pre-selected duration in the approval form (1h 6h 12h 24h 2d 7d 30d)
+MAX_DURATION=30d                 # hide longer durations from the form (1h 6h 12h 24h 2d 7d 30d)
+REASON_REQUIRED=no               # yes = approver must enter a reason before granting access
+BANDWIDTH_THRESHOLD_MB=0         # alert when a device transfers this many MB in a session; 0 = disabled
 MDNS=no                          # yes = reflect mDNS from LAN

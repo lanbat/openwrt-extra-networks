@@ -21,6 +21,12 @@ ALLOWLIST=no                     # open to any device
 ISOLATE=yes                      # clients cannot talk to each other (recommended for guests)
 DOT=no                           # yes = DNS via https-dns-proxy (encrypted DoT/DoH); requires https-dns-proxy
 ALLOWED_PORTS=                   # restrict outbound ports e.g. "80 443"; blank = allow all
+VLAN_ID=                         # 802.1Q VLAN ID to bridge into this network e.g. 20 (blank = WiFi only)
+VLAN_TRUNK=                      # physical trunk interface e.g. eth0 (required when VLAN_ID is set)
 NOTIFY_URL=                      # ntfy.sh URL for new device alerts e.g. https://ntfy.sh/my-topic
+DEFAULT_DURATION=24h             # pre-selected duration in the approval form (1h 6h 12h 24h 2d 7d 30d)
+MAX_DURATION=30d                 # hide longer durations from the form (1h 6h 12h 24h 2d 7d 30d)
+REASON_REQUIRED=no               # yes = approver must enter a reason before granting access
+BANDWIDTH_THRESHOLD_MB=0         # alert when a device transfers this many MB in a session; 0 = disabled
 MDNS=no                          # yes = reflect mDNS from LAN (enables casting, AirPrint, etc.)
 ACCESS_HOURS=                    # restrict internet to hours e.g. "8-23"; blank = always on (set via access-schedule.sh)
