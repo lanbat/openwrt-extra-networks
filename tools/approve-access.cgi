@@ -15,10 +15,27 @@ _valid_ip() {
     echo "$1" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
 }
 
+_html() {
+    printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+}
+
+# CSRF: reject POSTs whose Origin/Referer is not a private address.
+# Browsers omit Origin on same-origin navigations, so a missing header is allowed.
+if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
+    _origin="${HTTP_ORIGIN:-${HTTP_REFERER:-}}"
+    case "$_origin" in
+        ""|http://192.168.*|http://10.*|http://172.1[6-9].*|http://172.2[0-9].*|http://172.3[01].*) ;;
+        *) printf 'Content-Type: text/html\r\n\r\nForbidden'; exit 0 ;;
+    esac
+fi
+
 # Read parameters from GET query string or POST body
 if [ "${REQUEST_METHOD:-GET}" = "POST" ] && [ -n "${CONTENT_LENGTH:-}" ]; then
+    # Bound CONTENT_LENGTH to prevent hanging on oversized bodies
+    printf '%s' "$CONTENT_LENGTH" | grep -qE '^[0-9]+$' && [ "$CONTENT_LENGTH" -le 1024 ] \
+        || { printf 'Content-Type: text/html\r\n\r\nBad request'; exit 0; }
     _params=$(head -c "$CONTENT_LENGTH")
-    # Also carry GET params for hidden fields on GET→POST form
+    # Carry GET params too — duration comes from POST, the rest from GET query string
     [ -n "$QUERY_STRING" ] && _params="${QUERY_STRING}&${_params}"
 else
     _params="$QUERY_STRING"
@@ -51,8 +68,8 @@ uci -q get firewall."${NET}_zone" >/dev/null 2>&1 \
 
 src_name=$(awk -v ip="$SRC" '$3==ip { print $4; exit }' /tmp/dhcp.leases 2>/dev/null)
 dst_name=$(awk -v ip="$DST" '$3==ip { print $4; exit }' /tmp/dhcp.leases 2>/dev/null)
-src_label=$([ -n "$src_name" ] && printf '%s (%s)' "$src_name" "$SRC" || printf '%s' "$SRC")
-dst_label=$([ -n "$dst_name" ] && printf '%s (%s)' "$dst_name" "$DST" || printf '%s' "$DST")
+src_label=$([ -n "$src_name" ] && printf '%s (%s)' "$(_html "$src_name")" "$SRC" || printf '%s' "$SRC")
+dst_label=$([ -n "$dst_name" ] && printf '%s (%s)' "$(_html "$dst_name")" "$DST" || printf '%s' "$DST")
 
 QS="net=${NET}&src=${SRC}&dst=${DST}&proto=${PROTO}&port=${PORT}"
 
@@ -82,10 +99,10 @@ HTML
 
     if [ "$ok" -eq 0 ]; then
         printf '<h1>Access granted</h1>\n'
-        printf '<div class="box ok">%s</div>\n' "$result"
+        printf '<div class="box ok">%s</div>\n' "$(_html "$result")"
     else
         printf '<h1>Error</h1>\n'
-        printf '<div class="box err">%s</div>\n' "$result"
+        printf '<div class="box err">%s</div>\n' "$(_html "$result")"
     fi
     printf '<p><a href="/cgi-bin/approve-access?%s">Back</a></p>\n' "$QS"
     printf '</body></html>\n'
