@@ -15,6 +15,10 @@ CONFIG="$1"
 BASE_DIR=/etc/extra-networks
 mkdir -p "$BASE_DIR"
 
+# Store repo location so tools can reference each other by absolute path
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+printf 'REPO_DIR=%s\n' "$SCRIPT_DIR" > "${BASE_DIR}/config"
+
 RADIO="${RADIO:-radio0}"
 RADIO_EXTRA="${RADIO_EXTRA:-}"
 ENCRYPTION="${ENCRYPTION:-psk2+psk3}"
@@ -326,6 +330,20 @@ chain ${IFACE}_port_filter {
 EOF
 fi
 
+# ── LAN access monitor ────────────────────────────────────────────────────────
+# When NOTIFY_URL is set and LAN_ACCESS is not fully open, log new connection
+# attempts from LAN so check-access-log.sh can notify and allow-service.sh can grant.
+
+rm -f /etc/nftables.d/25-${IFACE}-lanmonitor.nft
+if [ -n "$NOTIFY_URL" ] && [ "${LAN_ACCESS:-no}" != yes ]; then
+    cat >/etc/nftables.d/25-${IFACE}-lanmonitor.nft <<EOF
+chain ${IFACE}_lan_monitor {
+    type filter hook forward priority -2; policy accept;
+    iifname "br-lan" oifname "br-${IFACE}" ct state new log prefix "EXTNET-LAN2${IFACE}: " level info
+}
+EOF
+fi
+
 # ── traffic counters ──────────────────────────────────────────────────────────
 # Always create — status.sh reads these to show bytes transferred since last fw4 reload.
 
@@ -363,8 +381,18 @@ NOTIFYEOF
     chmod 0755 "${BASE_DIR}/dhcp-notify"
     uci set dhcp.@dnsmasq[0].dhcpscript="${BASE_DIR}/dhcp-notify"
     uci commit dhcp
+
+    # Cron: check access log every minute for blocked LAN→zone attempts
+    ( crontab -l 2>/dev/null | grep -v '# extra-networks-monitor' ) | crontab -
+    ( crontab -l 2>/dev/null
+      echo "* * * * * sh ${SCRIPT_DIR}/tools/check-access-log.sh  # extra-networks-monitor"
+    ) | crontab -
 else
     rm -f "${BASE_DIR}/${IFACE}-notify.conf"
+    # Remove monitor cron only if no other network still has NOTIFY_URL configured
+    if ! ls "${BASE_DIR}"/*-notify.conf >/dev/null 2>&1; then
+        ( crontab -l 2>/dev/null | grep -v '# extra-networks-monitor' ) | crontab -
+    fi
 fi
 
 # ── mDNS reflection ───────────────────────────────────────────────────────────

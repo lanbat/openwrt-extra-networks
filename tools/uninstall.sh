@@ -83,9 +83,19 @@ for f in \
     /etc/nftables.d/21-${IFACE}-allowlist.nft \
     /etc/nftables.d/22-${IFACE}-ports.nft \
     /etc/nftables.d/24-${IFACE}-counter.nft \
+    /etc/nftables.d/25-${IFACE}-lanmonitor.nft \
     /etc/nftables.d/30-${IFACE}-timeblock.nft; do
     [ -f "$f" ] && rm -f "$f" && echo "  Removed: $f"
 done
+
+# Remove any temporary LAN allow rules for this network
+for s in $(uci show firewall 2>/dev/null \
+           | awk -F= "/^firewall\\.allow_lan_${IFACE}_/ { gsub(/\\..*/, \"\", \$1); print \$1 }" \
+           | sort -u | sed 's/^firewall\.//'); do
+    uci -q delete firewall."$s" 2>/dev/null && echo "  Removed temp allow: $s"
+    ( crontab -l 2>/dev/null | grep -v "# $s" ) | crontab -
+done
+[ -n "$(uci changes firewall 2>/dev/null)" ] && uci commit firewall
 
 # ── hotplug / dnsmasq / allowlist ─────────────────────────────────────────────
 
