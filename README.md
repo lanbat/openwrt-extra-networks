@@ -121,7 +121,7 @@ aa:bb:cc:dd:ee:ff  192.168.2.100  Nest Protect Living Room
 11:22:33:44:55:66  192.168.2.101  Nest Protect Bedroom
 ```
 
-After editing, apply without restarting:
+The file lives at `/etc/extra-networks/${IFACE}-allowed-macs`. After editing, apply without restarting:
 
 ```sh
 ACTION=ifup INTERFACE=untrusted sh /etc/hotplug.d/iface/51-untrusted-macfilter

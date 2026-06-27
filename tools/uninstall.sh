@@ -18,6 +18,8 @@ PURGE=no
 
 [ -z "${IFACE:-}" ] && { echo "ERROR: IFACE not set in config"; exit 1; }
 
+BASE_DIR=/etc/extra-networks
+
 echo "Removing network: $IFACE"
 
 # ── wireless ──────────────────────────────────────────────────────────────────
@@ -89,16 +91,16 @@ done
 
 rm -f /etc/hotplug.d/iface/51-${IFACE}-macfilter \
       /etc/dnsmasq.d/${IFACE}-macfilter.conf \
-      /etc/${IFACE}-notify.conf \
+      "${BASE_DIR}/${IFACE}-notify.conf" \
       /www/net/${IFACE}.html
 ( crontab -l 2>/dev/null | grep -v "# access-${IFACE}" ) | crontab - 2>/dev/null || true
 echo "  Removed hotplug, notify, schedule, and dnsmasq macfilter files"
 
 if [ "$PURGE" = yes ]; then
-    rm -f /etc/${IFACE}-allowed-macs && echo "  Removed allowed-macs file (--purge)"
+    rm -f "${BASE_DIR}/${IFACE}-allowed-macs" && echo "  Removed allowed-macs file (--purge)"
 else
-    [ -f /etc/${IFACE}-allowed-macs ] \
-        && echo "  Kept /etc/${IFACE}-allowed-macs (pass --purge to remove)"
+    [ -f "${BASE_DIR}/${IFACE}-allowed-macs" ] \
+        && echo "  Kept ${BASE_DIR}/${IFACE}-allowed-macs (pass --purge to remove)"
 fi
 
 # ── apply ─────────────────────────────────────────────────────────────────────

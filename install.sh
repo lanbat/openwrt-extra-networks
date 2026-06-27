@@ -12,6 +12,9 @@ CONFIG="$1"
 [ -z "${WIFI_KEY:-}" ] && { echo "ERROR: WIFI_KEY not set"; exit 1; }
 [ ${#WIFI_KEY} -lt 8 ] && { echo "ERROR: WIFI_KEY must be at least 8 characters"; exit 1; }
 
+BASE_DIR=/etc/extra-networks
+mkdir -p "$BASE_DIR"
+
 RADIO="${RADIO:-radio0}"
 RADIO_EXTRA="${RADIO_EXTRA:-}"
 ENCRYPTION="${ENCRYPTION:-psk2+psk3}"
@@ -253,7 +256,7 @@ fi
 #   2. nft drops forwarding from any IP not assigned to a listed MAC
 
 if [ "${ALLOWLIST:-no}" = yes ]; then
-    MAC_FILE=/etc/${IFACE}-allowed-macs
+    MAC_FILE=${BASE_DIR}/${IFACE}-allowed-macs
     if [ ! -f "$MAC_FILE" ]; then
         cat >"$MAC_FILE" <<MACEOF
 # Devices allowed on the ${IFACE} network.
@@ -281,7 +284,7 @@ EOF
 [ "\$ACTION" = ifup ] || exit 0
 [ "\$INTERFACE" = ${IFACE} ] || exit 0
 
-MAC_FILE=/etc/${IFACE}-allowed-macs
+MAC_FILE=${BASE_DIR}/${IFACE}-allowed-macs
 DNSMASQ_CONF=/etc/dnsmasq.d/${IFACE}-macfilter.conf
 
 nft flush set inet fw4 ${IFACE}_allowed_ips 2>/dev/null || true
@@ -340,13 +343,13 @@ EOF
 
 if [ -n "$NOTIFY_URL" ]; then
     printf 'SUBNET=%s\nNOTIFY_URL=%s\nIFACE_NAME=%s\n' \
-        "$SUBNET" "$NOTIFY_URL" "$IFACE" >/etc/${IFACE}-notify.conf
+        "$SUBNET" "$NOTIFY_URL" "$IFACE" >"${BASE_DIR}/${IFACE}-notify.conf"
 
-    cat >/usr/sbin/dhcp-notify <<'NOTIFYEOF'
+    cat >"${BASE_DIR}/dhcp-notify" <<'NOTIFYEOF'
 #!/bin/sh
 [ "$1" = add ] || exit 0
 _mac="$2"; _ip="$3"; _host="${4:-unknown}"
-for _conf in /etc/*-notify.conf; do
+for _conf in /etc/extra-networks/*-notify.conf; do
     [ -f "$_conf" ] || continue
     unset SUBNET NOTIFY_URL IFACE_NAME
     . "$_conf"
@@ -357,11 +360,11 @@ for _conf in /etc/*-notify.conf; do
         -d "${_host} (${_mac}) joined at ${_ip}" >/dev/null &
 done
 NOTIFYEOF
-    chmod 0755 /usr/sbin/dhcp-notify
-    uci set dhcp.@dnsmasq[0].dhcpscript=/usr/sbin/dhcp-notify
+    chmod 0755 "${BASE_DIR}/dhcp-notify"
+    uci set dhcp.@dnsmasq[0].dhcpscript="${BASE_DIR}/dhcp-notify"
     uci commit dhcp
 else
-    rm -f /etc/${IFACE}-notify.conf
+    rm -f "${BASE_DIR}/${IFACE}-notify.conf"
 fi
 
 # ── mDNS reflection ───────────────────────────────────────────────────────────
@@ -428,7 +431,7 @@ else
     echo "  Firewall:  ${IFACE}→WAN yes  |  ${IFACE}→LAN no  |  LAN→${IFACE} no"
 fi
 if [ "${ALLOWLIST:-no}" = yes ]; then
-    echo "  Allowlist: /etc/${IFACE}-allowed-macs"
+    echo "  Allowlist: ${BASE_DIR}/${IFACE}-allowed-macs"
     echo "             edit then run: ACTION=ifup INTERFACE=${IFACE} sh /etc/hotplug.d/iface/51-${IFACE}-macfilter"
 fi
 [ "$ISOLATE" = yes ] && echo "  Isolate:   clients cannot reach each other"
