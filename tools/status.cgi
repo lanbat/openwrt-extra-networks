@@ -254,10 +254,12 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
                 [ "$_total" -gt 0 ] && _bw=$(_human "$_total")
             fi
 
-            _hn_disp="$(_html "$_hn")"; [ "$_hn" = "*" ] && _hn_disp="—"
-            _dns="—"
-            [ "$_hn" != "*" ] && [ -n "$_hn" ] && _dns="$(_html "${_hn}.${_domain}")"
-            printf '<tr><td>%s</td><td class="dim">%s</td><td>%s</td>' "$_hn_disp" "$_dns" "$_ip"
+            _hn_disp="—"; [ "$_hn" != "*" ] && [ -n "$_hn" ] && _hn_disp="$(_html "$_hn")"
+            _dns=$(nslookup "$_ip" 2>/dev/null \
+                | awk '/name =/{gsub(/\.$/,"",$NF); print $NF; exit}')
+            [ -z "$_dns" ] && _dns="—"
+            printf '<tr><td>%s</td><td class="dim">%s</td><td>%s</td>' \
+                "$_hn_disp" "$(_html "$_dns")" "$_ip"
             [ "$_hdr_ip6" = yes ] && printf '<td class="dim">%s</td>' "${_ipv6:----}"
             printf '<td class="dim">%s</td>' "$_mac"
             [ "$_hdr_sig" = yes ] && printf '<td>%s</td>' "${_sig:----}"
