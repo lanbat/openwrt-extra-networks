@@ -222,6 +222,7 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
     . "$_conf"
     _iface="${IFACE_NAME:-}"
     [ -z "$_iface" ] && continue
+    [ "$_iface" = untrusted ] && SHOW_QR=no
 
     _ssid=$(uci -q get wireless."$_iface".ssid 2>/dev/null || true)
     _up=no; ip link show "br-${_iface}" 2>/dev/null | grep -q "LOWER_UP" && _up=yes

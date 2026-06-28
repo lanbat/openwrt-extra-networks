@@ -15,10 +15,11 @@ _conf="${BASE_DIR}/${NET}-notify.conf"
 unset SHOW_QR IFACE_NAME
 . "$_conf"
 
-[ "${SHOW_QR:-no}" = yes ] \
+_iface="${IFACE_NAME:-$NET}"
+
+[ "${SHOW_QR:-no}" = yes ] && [ "$_iface" != untrusted ] \
     || { printf 'Status: 403\r\nContent-Type: text/plain\r\n\r\nForbidden'; exit 0; }
 
-_iface="${IFACE_NAME:-$NET}"
 _ssid=$(uci -q get wireless."$_iface".ssid 2>/dev/null || true)
 _key=$(uci -q get wireless."$_iface".key 2>/dev/null || true)
 _enc=$(uci -q get wireless."$_iface".encryption 2>/dev/null || true)

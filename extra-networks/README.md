@@ -116,7 +116,7 @@ Config files live in `configs/` and are gitignored — they never leave the rout
 | `MAX_DURATION` | `30d` | Longest duration available in the LAN access approval form — options above this are hidden |
 | `REASON_REQUIRED` | `no` | `yes` — approver must enter a reason before LAN access is granted |
 | `BANDWIDTH_THRESHOLD_MB` | `0` | Alert when a device transfers this many MB in a session; `0` to disable |
-| `SHOW_QR` | `no` | Show WiFi QR code and password in the status dashboard |
+| `SHOW_QR` | `no` | Show WiFi QR code and password in the status dashboard; ignored for the `untrusted` network |
 | `ROTATE_PASSWORD` | `no` | Show a "Rotate password" button in the status dashboard |
 | `DESCRIPTION` | — | Label shown in the status dashboard header for this network |
 
