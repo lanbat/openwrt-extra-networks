@@ -174,8 +174,12 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
     _ipv6_prefixes=$(ip -6 addr show "br-${_iface}" scope global 2>/dev/null \
         | awk '/inet6/{print $2}')
     for _ipv6_prefix in $_ipv6_prefixes; do
-        printf '<div class="row"><span class="lbl">IPv6 prefix</span><span class="val">%s</span></div>' \
-            "$(_html "$_ipv6_prefix")"
+        case "$_ipv6_prefix" in
+            fd*|fc*) _ipv6_lbl="IPv6 prefix (ULA)" ;;
+            *)       _ipv6_lbl="IPv6 prefix" ;;
+        esac
+        printf '<div class="row"><span class="lbl">%s</span><span class="val">%s</span></div>' \
+            "$_ipv6_lbl" "$(_html "$_ipv6_prefix")"
     done
     printf '<div class="row"><span class="lbl">Traffic ↓ / ↑</span><span class="val">%s / %s</span></div>' \
         "$_rxh" "$_txh"
@@ -227,7 +231,7 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
         _bw_data6=$(nft list set inet fw4 "${_iface}_device_bytes6" 2>/dev/null)
         _hdr_bw=$([ -n "$_bw_data$_bw_data6" ] && echo yes || echo no)
         _hdr_sig=$([ -n "$_assoc" ] && echo yes || echo no)
-        _hdr_ip6=$([ -n "$_neigh6" ] && echo yes || echo no)
+        _hdr_ip6=$([ -n "$_ipv6_prefixes" ] && echo yes || echo no)
 
         printf '<table><tr><th>Hostname</th><th>DNS</th><th>IPv4</th><th>Joined</th>'
         [ "$_hdr_ip6" = yes ] && printf '<th>IPv6</th>'
