@@ -443,6 +443,13 @@ if [ -n "$NOTIFY_URL" ]; then
     cat >/etc/hotplug.d/dhcp/50-extra-networks <<'NOTIFYEOF'
 #!/bin/sh
 [ "$ACTION" = add ] || exit 0
+
+# Record join time (mac → timestamp) for the status dashboard
+_jfile=/tmp/extra-networks-joins
+{ grep -v "^${MACADDR}	" "$_jfile" 2>/dev/null
+  printf '%s\t%s\n' "$MACADDR" "$(date '+%d %b %H:%M')"; } > "${_jfile}.tmp" \
+    && mv "${_jfile}.tmp" "$_jfile" || true
+
 . /etc/extra-networks/_lib.sh
 for _conf in /etc/extra-networks/*-notify.conf; do
     [ -f "$_conf" ] || continue

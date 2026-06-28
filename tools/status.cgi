@@ -225,7 +225,7 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
         _hdr_sig=$([ -n "$_assoc" ] && echo yes || echo no)
         _hdr_ip6=$([ -n "$_neigh6" ] && echo yes || echo no)
 
-        printf '<table><tr><th>Hostname</th><th>DNS</th><th>IPv4</th>'
+        printf '<table><tr><th>Hostname</th><th>DNS</th><th>IPv4</th><th>Joined</th>'
         [ "$_hdr_ip6" = yes ] && printf '<th>IPv6</th>'
         printf '<th>MAC</th>'
         [ "$_hdr_sig" = yes ] && printf '<th>Signal</th>'
@@ -258,8 +258,12 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
             _dns=$(nslookup "$_ip" 2>/dev/null \
                 | awk '/name =/{gsub(/\.$/,"",$NF); print $NF; exit}')
             [ -z "$_dns" ] && _dns="—"
-            printf '<tr><td>%s</td><td class="dim">%s</td><td>%s</td>' \
-                "$_hn_disp" "$(_html "$_dns")" "$_ip"
+            _joined=$(awk -F'\t' -v m="$_mac" \
+                'tolower($1)==tolower(m){print $2; exit}' \
+                /tmp/extra-networks-joins 2>/dev/null || true)
+            [ -z "$_joined" ] && _joined="—"
+            printf '<tr><td>%s</td><td class="dim">%s</td><td>%s</td><td class="dim">%s</td>' \
+                "$_hn_disp" "$(_html "$_dns")" "$_ip" "$_joined"
             [ "$_hdr_ip6" = yes ] && printf '<td class="dim">%s</td>' "${_ipv6:----}"
             printf '<td class="dim">%s</td>' "$_mac"
             [ "$_hdr_sig" = yes ] && printf '<td>%s</td>' "${_sig:----}"
