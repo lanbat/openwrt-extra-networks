@@ -75,6 +75,9 @@ _DEV_LABEL=$(awk -v m="$MAC" 'tolower($1)==tolower(m){sub(/^[^\t]+\t/,""); print
     "$_labels_f" 2>/dev/null || true)
 _DEV_IP=$(awk -v m="$MAC" 'tolower($1)==tolower(m){print $2; exit}' \
     "$_ips_f" 2>/dev/null || true)
+[ -n "$_DEV_IP" ] || _DEV_IP=$(awk -v m="$MAC" 'tolower($1)==tolower(m){print $2; exit}' \
+    "${BASE_DIR}/${_iface}-join-approved-ips" 2>/dev/null || true)
+[ -n "$_DEV_IP" ] || _DEV_IP=$(_ip4_for_mac "$MAC")
 _DEV_IP6=$(awk -v m="$MAC" 'tolower($1)==tolower(m){print $2; exit}' \
     "$_ip6s_f" 2>/dev/null || true)
 [ -n "$_DEV_IP6" ] || _DEV_IP6=$(ip -6 neigh show dev "br-${_iface}" 2>/dev/null \
