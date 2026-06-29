@@ -84,6 +84,11 @@ _DEV_LIMIT=$(awk -v m="$MAC" 'tolower($1)==tolower(m){print $2; exit}' \
 _DEV_LIMIT="${_DEV_LIMIT:-120}"
 _DEV_DISPLAY="${_DEV_LABEL:-$MAC}"
 _BACK_URL="/cgi-bin/device?net=${NET}&mac=${MAC}"
+_JOIN_IP="${_DEV_IP:-$_DEV_IP6}"
+_JOIN_STATE=Untracked
+grep -qixF "$MAC" "$_join_approved_f" 2>/dev/null && _JOIN_STATE=Approved
+grep -qixF "$MAC" "$_join_denied_f" 2>/dev/null && _JOIN_STATE=Denied
+grep -qi "^${MAC} " "$_join_pending_f" 2>/dev/null && [ "$_JOIN_STATE" = Untracked ] && _JOIN_STATE=Pending
 
 # ── POST actions ──────────────────────────────────────────────────────────────
 
@@ -336,20 +341,49 @@ _rules_rows=$([ -f "$_rules_f" ] && \
     done \
 || true)
 
-_approval_row=""
-if [ "$_is_approved" = yes ]; then
-    _approval_row=$(cat <<HTML
-<div class="row"><span class="lbl">Approval</span><span class="val">
+_approval_controls=""
+if [ "$_JOIN_STATE" != Approved ] && [ -n "$_JOIN_IP" ]; then
+    _approval_controls="${_approval_controls}$(cat <<HTML
+<form method="POST" action="/cgi-bin/approve-join">
+<input type="hidden" name="net" value="$(_html "$NET")">
+<input type="hidden" name="ip" value="$(_html "$_JOIN_IP")">
+<input type="hidden" name="mac" value="$(_html "$MAC")">
+<input type="hidden" name="host" value="$(_html "$_DEV_LABEL")">
+<input type="hidden" name="action" value="approve">
+<button class="btn-ok" type="submit">Approve</button>
+</form>
+HTML
+)"
+fi
+if [ "$_JOIN_STATE" != Approved ] && [ "$_JOIN_STATE" != Denied ] && [ -n "$_JOIN_IP" ]; then
+    _approval_controls="${_approval_controls}$(cat <<HTML
+<form method="POST" action="/cgi-bin/approve-join">
+<input type="hidden" name="net" value="$(_html "$NET")">
+<input type="hidden" name="ip" value="$(_html "$_JOIN_IP")">
+<input type="hidden" name="mac" value="$(_html "$MAC")">
+<input type="hidden" name="host" value="$(_html "$_DEV_LABEL")">
+<input type="hidden" name="action" value="deny">
+<button class="btn-deny" type="submit">Deny</button>
+</form>
+HTML
+)"
+fi
+if [ "$_JOIN_STATE" = Approved ]; then
+    _approval_controls="${_approval_controls}$(cat <<HTML
 <form method="POST" action="/cgi-bin/device" onsubmit="return confirm('Revoke internet approval for $(_html "$_DEV_DISPLAY")?')">
 <input type="hidden" name="net" value="$(_html "$NET")">
 <input type="hidden" name="mac" value="$(_html "$MAC")">
 <input type="hidden" name="action" value="revoke_join_approval">
 <button class="btn-danger" type="submit">Revoke approval</button>
 </form>
-</span></div>
+HTML
+)"
+fi
+_approval_row=$(cat <<HTML
+<div class="row"><span class="lbl">Join approval</span><span class="val $([ "$_JOIN_STATE" = Approved ] && echo ok || echo warn)">$(_html "$_JOIN_STATE")</span></div>
+<div class="row"><span class="lbl">Actions</span><span class="val actions">${_approval_controls:-No action available}</span></div>
 HTML
 )
-fi
 
 printf 'Content-Type: text/html\r\n\r\n'
 
@@ -377,7 +411,11 @@ a{color:#1976d2;text-decoration:none}
 form{display:inline}
 button{font-size:.75rem;padding:.15rem .45rem;cursor:pointer;background:#1976d2;
        color:#fff;border:none;border-radius:4px}
+.actions{display:inline-flex;gap:.25rem;align-items:center;justify-content:flex-end;flex-wrap:wrap}
+.actions form{display:inline-flex}
+.actions button{font-weight:600;padding:.22rem .55rem;border-radius:999px;box-shadow:0 1px 2px rgba(0,0,0,.12)}
 .btn-ok{background:#2e7d32}
+.btn-deny{background:#c62828}
 .btn-danger{background:#c62828}
 input[type=text],input[type=number]{font-size:.875rem;padding:.3rem .5rem;
    border:1px solid #ccc;border-radius:4px}
@@ -393,7 +431,6 @@ input[type=text],input[type=number]{font-size:.875rem;padding:.3rem .5rem;
 <div class="row"><span class="lbl">Tracked IPv4</span><span class="val">${_DEV_IP:----}</span></div>
 <div class="row"><span class="lbl">Tracked IPv6</span><span class="val">${_DEV_IP6:----}</span></div>
 <div class="row"><span class="lbl">Network</span><span class="val">$(_html "$_iface")</span></div>
-<div class="row"><span class="lbl">Join approval</span><span class="val $([ "$_is_approved" = yes ] && echo ok || echo warn)">$([ "$_is_approved" = yes ] && echo Approved || echo Pending)</span></div>
 ${_approval_row}
 </div>
 

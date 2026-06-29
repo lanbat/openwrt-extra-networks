@@ -118,7 +118,7 @@ Config files live in `configs/` and are gitignored — they never leave the rout
 | `REASON_REQUIRED` | `no` | `yes` — approver must enter a reason before LAN access is granted |
 | `BANDWIDTH_THRESHOLD_MB` | `0` | Alert when a device transfers this many MB in a session; `0` to disable |
 | `SHOW_QR` | `no` | Show WiFi QR code and password in the status dashboard; ignored for the `untrusted` network |
-| `ROTATE_PASSWORD` | `no` | Show a "Rotate password" button in the status dashboard |
+| `ROTATE_PASSWORD` | `no` | Show a manual "Rotate password" button in the status dashboard |
 | `DESCRIPTION` | — | Label shown in the status dashboard header for this network |
 
 > `ACCESS_HOURS` is set via `tools/access-schedule.sh`, not in the config file.
@@ -210,7 +210,7 @@ How it works:
 
 The dashboard shows join state in the connected-device table: pending, approved, or denied. Denied devices stay blocked and can be approved later from the same row. Approval, denial, and revocation all send a push notification naming the device (IP, DNS, hostname, MAC) and the LAN client that made the decision.
 
-Join decisions are also written to `/etc/extra-networks/${IFACE}-join-history` and shown on the dashboard. `JOIN_HISTORY_RETENTION` controls how long entries are kept; the default is `90d`.
+Join decisions are also written to `/etc/extra-networks/${IFACE}-join-history` and shown on the dashboard. `JOIN_HISTORY_RETENTION` controls how long entries are kept; the default is `90d`. The installer adds `/etc/extra-networks` to `sysupgrade.conf` so history survives reboots and normal OpenWrt sysupgrades.
 
 When the WiFi password is rotated, labeled approved devices stay approved; unlabeled approvals, pending requests, and denied requests are cleared because those devices must reconnect with the new password.
 
@@ -397,7 +397,7 @@ Also cancels any scheduled cron removal.
 
 ### Rotate password
 
-Generate a new random password, apply it immediately, and print a QR code.
+Generate a new random password, apply it immediately, and print a QR code. Password rotation is never scheduled automatically; use this only when you intentionally need to replace the current WiFi password.
 
 ```sh
 sh tools/rotate-password.sh configs/guest.conf

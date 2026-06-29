@@ -14,6 +14,7 @@ CONFIG="$1"
 
 BASE_DIR=/etc/extra-networks
 mkdir -p "$BASE_DIR"
+grep -qF "$BASE_DIR" /etc/sysupgrade.conf 2>/dev/null || printf '%s\n' "$BASE_DIR" >> /etc/sysupgrade.conf
 
 # Store repo location so tools can reference each other by absolute path
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -523,6 +524,9 @@ fi
 _cron_set() { ( crontab -l 2>/dev/null | grep -vF "# $1"; echo "$2  # $1" ) | crontab -; }
 
 cp "${SCRIPT_DIR}/tools/_lib.sh" "${BASE_DIR}/_lib.sh"
+
+# Password rotation should only happen from an explicit user action.
+( crontab -l 2>/dev/null | grep -v 'rotate-password' ) | crontab - 2>/dev/null || true
 
 if [ -n "$NOTIFY_URL" ]; then
     mkdir -p /etc/hotplug.d/dhcp
