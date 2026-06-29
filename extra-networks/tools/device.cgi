@@ -588,6 +588,42 @@ else
     printf '<p class="dim">No history yet.</p>\n'
 fi
 
+_activity_html=""
+# shellcheck disable=SC2086
+set -- ${BASE_DIR}/*-join-history
+if [ -f "$1" ]; then
+    _activity_html=$(awk -v mac="$MAC" -v base="${BASE_DIR}/" -F'\t' '
+    function h(s,  t){t=s;gsub(/&/,"\\&amp;",t);gsub(/</,"\\&lt;",t);gsub(/>/,"\\&gt;",t);gsub(/"/,"\\&quot;",t);return t}
+    BEGIN{
+        bcls["approved"]="approved";bcls["denied"]="denied";bcls["revoked"]="revoked"
+        bcls["connected"]="connected";bcls["disconnected"]="disconnected"
+        blbl["approved"]="Approved";blbl["denied"]="Denied";blbl["revoked"]="Revoked"
+        blbl["connected"]="Connected";blbl["disconnected"]="Disconnected"
+    }
+    tolower($11)==tolower(mac){
+        fn=FILENAME; sub(base,"",fn); sub(/-join-history$/,"",fn)
+        n++;rw[n]=$2;ra[n]=$3;rm[n]=$4;ri4[n]=$5;ri6[n]=$6;rnet[n]=fn
+    }
+    END{
+        s=(n>20)?n-19:1
+        for(i=n;i>=s;i--){
+            act=ra[i];tmac=rm[i];net=rnet[i]
+            cls=(act in bcls)?bcls[act]:"untracked"
+            lbl=(act in blbl)?blbl[act]:h(act)
+            tip=(ri4[i]!="")?ri4[i]:(ri6[i]!="")?ri6[i]:"—"
+            tlink=(tmac!="")?"<a href=\"/cgi-bin/device?net="h(net)"&mac="h(tmac)"\">"h(tmac)"</a>":"—"
+            printf "<tr><td class=\"dim\">%s</td><td><span class=\"badge badge-%s\">%s</span></td><td>%s</td><td class=\"dim\">%s</td><td>%s</td></tr>\n",\
+                h(rw[i]),cls,lbl,h(net),tlink,h(tip)
+        }
+    }' "$@" 2>/dev/null)
+fi
+if [ -n "$_activity_html" ]; then
+    printf '<h2>Approval activity</h2>\n'
+    printf '<table><tr><th>When</th><th>Action</th><th>Network</th><th>Target MAC</th><th>Target IP</th></tr>\n'
+    printf '%s\n' "$_activity_html"
+    printf '</table>\n'
+fi
+
 printf '<h2 style="margin-top:2rem;color:#b71c1c">Danger zone</h2>\n'
 printf '<p style="font-size:.875rem;color:#555">Removes this device completely: label, rules, approved status, and DNS entry. The device will be blocked immediately and must be re-approved if it reconnects.</p>\n'
 printf '<form method="POST" action="/cgi-bin/device" onsubmit="return confirm(%s)">\n' \
