@@ -124,7 +124,7 @@ Config files live in `configs/` and are gitignored — they never leave the rout
 | `ROTATE_PASSWORD` | `no` | Show a manual "Rotate password" button in the status dashboard |
 | `DESCRIPTION` | — | Label shown in the status dashboard header for this network |
 
-> `ACCESS_HOURS` is set via `tools/access-schedule.sh`, not in the config file.
+> `ACCESS_HOURS` appears in the example config files as a reminder that a schedule can be set, but `install.sh` does not read it — the line is inert. Use `tools/access-schedule.sh` to set or remove the schedule.
 
 ## Allowlist
 
@@ -306,6 +306,7 @@ The page auto-refreshes every 60 seconds and shows:
 - **Pending LAN access** — blocked isolated→LAN connection attempts logged since the last check, with **Approve** buttons linking directly to the approval form
 - **Active LAN access** — temporary allowances in both directions (LAN→isolated and isolated→LAN) with destination, port, protocol, and time remaining
 - **Port forwards** — active redirects with zone, port, destination, and expiry
+- **Recent blocked** — last 10 blocked forwarding attempts from allowlist-restricted networks (`ALLOWLIST=yes`), showing time, source device, destination, and port/proto
 - **WiFi QR codes** — SSID, password, and scannable QR code per network (when `SHOW_QR=yes`)
 
 Only reachable from LAN — isolated zones have `INPUT=REJECT`.
@@ -461,6 +462,12 @@ sh tools/rotate-password.sh configs/guest.conf
 ```
 
 Updates the config file in place, applies the new key to the active WiFi network, and disconnects clients still using the old password. When `JOIN_APPROVAL=yes`, labeled approved devices stay approved; unlabeled approvals, pending requests, and denied requests are cleared.
+
+The same action is available from the status dashboard when `ROTATE_PASSWORD=yes` is set. The dashboard button calls `/cgi-bin/rotate-password` (POST only, CSRF-checked), which generates a new password, applies it live via hostapd without reloading WiFi, syncs the config file on disk, and sends a push notification containing the new password. The dashboard page refreshes automatically so the updated QR code is visible immediately.
+
+> The dashboard rotation does **not** regenerate the guest-info HTML page — run `sh tools/guest-info.sh configs/<iface>.conf` manually to update it if you use that page.
+
+The QR code shown in the dashboard is served as an SVG by `/cgi-bin/qr?net=<iface>` (requires `qrencode`). This endpoint returns `403` for networks where `SHOW_QR=no` or for the `untrusted` network.
 
 ### Guest info page
 
