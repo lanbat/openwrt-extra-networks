@@ -102,7 +102,18 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
         _new=$(printf '%s' "$(_get_param "$_params" label)" \
             | sed 's/+/ /g;s/^[[:space:]]*//;s/[[:space:]]*$//' | head -c 40)
         _safe=$(printf '%s' "$_new" | sed "s/[^a-zA-Z0-9 _.'-]//g")
-        [ -n "$_safe" ] && { mkdir -p "$BASE_DIR"; _upsert "$_labels_f" "$MAC" "$_safe"; }
+        if [ -n "$_safe" ]; then
+            mkdir -p "$BASE_DIR"
+            _upsert "$_labels_f" "$MAC" "$_safe"
+            _slug=$(_slugify "$_safe")
+            if [ -n "$_slug" ]; then
+                _hosts_f="/etc/dnsmasq.d/${_iface}-hosts.conf"
+                { grep -v "^dhcp-host=${MAC}," "$_hosts_f" 2>/dev/null
+                  printf 'dhcp-host=%s,%s\n' "$MAC" "$_slug"; } > "${_hosts_f}.tmp" \
+                    && mv "${_hosts_f}.tmp" "$_hosts_f" || true
+                /etc/init.d/dnsmasq reload >/dev/null 2>&1 || true
+            fi
+        fi
         printf '<meta http-equiv="refresh" content="0;url=%s">' "$(_html "$_BACK_URL")"
         exit 0
         ;;
@@ -146,8 +157,13 @@ MAC: ${MAC}"
           [ -n "$_DEV_IP" ] && printf '%s %s\n' "$MAC" "$_DEV_IP"
           [ -n "$_DEV_IP6" ] && printf '%s %s\n' "$MAC" "$_DEV_IP6"; } \
             > "${_join_pending_f}.tmp" && mv "${_join_pending_f}.tmp" "$_join_pending_f" || true
-        [ -n "$_DEV_IP" ] && nft add element inet fw4 "${_iface}_join_pending" "{ ${_DEV_IP} }" 2>/dev/null || true
+        [ -n "$_DEV_IP" ]  && nft delete element inet fw4 "${_iface}_join_approved_ips"  "{ ${_DEV_IP} }"  2>/dev/null || true
+        [ -n "$_DEV_IP6" ] && nft delete element inet fw4 "${_iface}_join_approved_ips6" "{ ${_DEV_IP6} }" 2>/dev/null || true
+        [ -n "$_DEV_IP" ]  && nft add element inet fw4 "${_iface}_join_pending"  "{ ${_DEV_IP} }"  2>/dev/null || true
         [ -n "$_DEV_IP6" ] && nft add element inet fw4 "${_iface}_join_pending6" "{ ${_DEV_IP6} }" 2>/dev/null || true
+        _approved_ips_f="${BASE_DIR}/${_iface}-join-approved-ips"
+        grep -v "^${MAC} " "$_approved_ips_f" > "${_approved_ips_f}.tmp" 2>/dev/null \
+            && mv "${_approved_ips_f}.tmp" "$_approved_ips_f" || true
         { grep -vixF "$MAC" "$_join_denied_f" 2>/dev/null; } \
             > "${_join_denied_f}.tmp" && mv "${_join_denied_f}.tmp" "$_join_denied_f" || true
         _join_history_add "$_iface" revoked "$MAC" "$_DEV_IP" "$_DEV_IP6" "${_DEV_LABEL:-${_dns:-unknown}}" "$_approver" "$_approver_ip4" "$_approver_ip6" "$_approver_mac" "${JOIN_HISTORY_RETENTION:-90d}"
@@ -253,6 +269,50 @@ The device is no longer approved on ${_iface}."
                 ;;
         esac
         printf '<meta http-equiv="refresh" content="0;url=%s">' "$(_html "$_BACK_URL")"
+        exit 0
+        ;;
+
+    delete)
+        _notify_ip="${_DEV_IP:-${_DEV_IP6:-}}"
+        _dns=$([ -n "$_notify_ip" ] && nslookup "$_notify_ip" 2>/dev/null \
+            | awk '/name =/{gsub(/\.$/,"",$NF); print $NF; exit}' || true)
+        _device_detail="Label: ${_DEV_DISPLAY}
+IPv4: ${_DEV_IP:-unknown}
+IPv6: ${_DEV_IP6:-unknown}
+DNS: ${_dns:-unknown}
+MAC: ${MAC}"
+        # Remove all state files
+        for _f in "$_labels_f" "$_ips_f" "$_ip6s_f" "$_limits_f" "$_rules_f"; do
+            [ -f "$_f" ] && { grep -v "^${MAC}	" "$_f" > "${_f}.tmp" 2>/dev/null \
+                && mv "${_f}.tmp" "$_f" || true; }
+        done
+        for _f in "$_join_approved_f" "$_join_denied_f"; do
+            [ -f "$_f" ] && { grep -vixF "$MAC" "$_f" > "${_f}.tmp" 2>/dev/null \
+                && mv "${_f}.tmp" "$_f" || true; }
+        done
+        for _f in "$_join_pending_f" "${BASE_DIR}/${_iface}-join-approved-ips"; do
+            [ -f "$_f" ] && { grep -v "^${MAC} " "$_f" > "${_f}.tmp" 2>/dev/null \
+                && mv "${_f}.tmp" "$_f" || true; }
+        done
+        # Remove from nft sets
+        [ -n "$_DEV_IP" ]  && nft delete element inet fw4 "${_iface}_join_approved_ips"  "{ ${_DEV_IP} }"  2>/dev/null || true
+        [ -n "$_DEV_IP6" ] && nft delete element inet fw4 "${_iface}_join_approved_ips6" "{ ${_DEV_IP6} }" 2>/dev/null || true
+        nft delete element inet fw4 "${_iface}_join_pending"  "{ ${_DEV_IP} }"  2>/dev/null || true
+        nft delete element inet fw4 "${_iface}_join_pending6" "{ ${_DEV_IP6} }" 2>/dev/null || true
+        # Remove dnsmasq entries
+        _dconf="/etc/dnsmasq.d/${_iface}-device-${_mac_n}.conf"
+        rm -f "$_dconf"
+        _hosts_f="/etc/dnsmasq.d/${_iface}-hosts.conf"
+        [ -f "$_hosts_f" ] && { grep -v "^dhcp-host=${MAC}," "$_hosts_f" > "${_hosts_f}.tmp" 2>/dev/null \
+            && mv "${_hosts_f}.tmp" "$_hosts_f" || true; }
+        /etc/init.d/dnsmasq reload >/dev/null 2>&1 || true
+        # Rebuild inspect chain (removes per-device nft sets and rules)
+        setsid sh /etc/extra-networks/_regen-inspect.sh "$_iface" >/dev/null 2>&1 &
+        _ntfy "Device removed — ${_iface}" default wastebasket \
+"${_DEV_DISPLAY} has been removed from ${_iface}.
+
+${_device_detail}"
+        printf '<meta http-equiv="refresh" content="0;url=/cgi-bin/status">'
         exit 0
         ;;
 
@@ -488,4 +548,13 @@ else
     printf '<p class="dim">No rules yet.</p>\n'
 fi
 
+printf '<h2 style="margin-top:2rem;color:#b71c1c">Danger zone</h2>\n'
+printf '<p style="font-size:.875rem;color:#555">Removes this device completely: label, rules, approved status, and DNS entry. The device will be blocked immediately and must be re-approved if it reconnects.</p>\n'
+printf '<form method="POST" action="/cgi-bin/device" onsubmit="return confirm(%s)">\n' \
+    "'Remove $(_html "$_DEV_DISPLAY") from $_iface? This cannot be undone.'"
+printf '<input type="hidden" name="net" value="%s"><input type="hidden" name="mac" value="%s">\n' \
+    "$(_html "$NET")" "$(_html "$MAC")"
+printf '<input type="hidden" name="action" value="delete">\n'
+printf '<button type="submit" style="background:#b71c1c;color:#fff;border:none;padding:.6rem 1.25rem;border-radius:6px;cursor:pointer;font-size:.9rem">Remove device</button>\n'
+printf '</form>\n'
 printf '</body></html>\n'

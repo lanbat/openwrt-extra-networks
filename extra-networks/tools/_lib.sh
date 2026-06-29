@@ -57,6 +57,13 @@ _ntfy() {
 Dashboard: ${_ntfy_dash}" >/dev/null &
 }
 
+# Slugify a label for use as a dnsmasq hostname: lowercase, non-alnum → hyphen.
+_slugify() {
+    printf '%s' "$1" \
+        | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz' \
+        | sed "s/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//"
+}
+
 # Resolve a device label for a MAC from {iface}-device-labels; falls back to MAC.
 _label_for_mac() {
     _lf="/etc/extra-networks/${2}-device-labels"

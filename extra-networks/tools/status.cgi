@@ -382,8 +382,16 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
             _dlabel=$(awk -v m="$_mac" \
                 'tolower($1)==tolower(m){sub(/^[^\t]+\t/,""); print; exit}' \
                 "${BASE_DIR}/${_iface}-device-labels" 2>/dev/null || true)
+            if [ -n "$_dlabel" ]; then
+                _label_cell="$(_html "$_dlabel")"
+            elif [ "${JOIN_APPROVAL:-no}" = yes ]; then
+                _label_cell=$(printf '<form method="POST" action="/cgi-bin/approve-join" style="margin:0"><input type="hidden" name="net" value="%s"><input type="hidden" name="mac" value="%s"><input type="hidden" name="action" value="set_label"><input type="text" name="label" placeholder="Add label" maxlength="40" style="padding:.2rem .35rem;border:1px solid #ccc;border-radius:3px;font-size:.8rem"><button type="submit" style="padding:.2rem .4rem;margin-left:.2rem;font-size:.8rem;border:1px solid #aaa;border-radius:3px;background:#f5f5f5;cursor:pointer">Save</button></form>' \
+                    "$(_html "$_iface")" "$(_html "$_mac")")
+            else
+                _label_cell="—"
+            fi
             printf '<tr><td>%s</td><td>%s</td><td class="dim">%s</td><td>%s</td><td class="dim">%s</td>' \
-                "$_hn_disp" "$(_html "${_dlabel:----}")" "$(_html "$_dns")" \
+                "$_hn_disp" "$_label_cell" "$(_html "$_dns")" \
                 "$([ "$_ip" = "-" ] && echo "—" || _html "$_ip")" "$_joined"
             [ "$_hdr_ip6" = yes ] && printf '<td class="dim">%s</td>' "${_ipv6:----}"
             if [ "${JOIN_APPROVAL:-no}" = yes ]; then
@@ -399,6 +407,8 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
                     printf '<form method="POST" action="/cgi-bin/approve-join">'
                     printf '<input type="hidden" name="net" value="%s"><input type="hidden" name="ip" value="%s"><input type="hidden" name="mac" value="%s"><input type="hidden" name="host" value="%s"><input type="hidden" name="action" value="approve">' \
                         "$(_html "$_iface")" "$(_html "$_approve_ip")" "$(_html "$_mac")" "$(_html "$_jhost")"
+                    printf '<input type="text" name="label" value="%s" placeholder="Label (required)" required maxlength="40" style="display:block;padding:.25rem .4rem;margin:.25rem 0;border:1px solid #ccc;border-radius:4px;font-size:.8rem">' \
+                        "$(_html "$_dlabel")"
                     printf '<button class="btn-ok" type="submit">Approve</button></form>'
                 fi
                 if [ "$_join_state" != Approved ] && [ "$_join_state" != Denied ]; then

@@ -86,7 +86,29 @@ MAC: ${MAC}"
 # POST: approve or deny
 if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
     _action=$(_get_param "$_params" action)
-    case "$_action" in approve|deny) ;; *) printf '<h1>Invalid action</h1>'; exit 0 ;; esac
+    case "$_action" in approve|deny|set_label) ;; *) printf '<h1>Invalid action</h1>'; exit 0 ;; esac
+
+    if [ "$_action" = set_label ]; then
+        _new=$(printf '%s' "$(_get_param "$_params" label)" \
+            | sed 's/+/ /g;s/^[[:space:]]*//;s/[[:space:]]*$//' | head -c 40)
+        _safe=$(printf '%s' "$_new" | sed "s/[^a-zA-Z0-9 _.'-]//g")
+        if [ -n "$_safe" ]; then
+            _lbl_f="${BASE_DIR}/${NET}-device-labels"
+            { grep -v "^${MAC}	" "$_lbl_f" 2>/dev/null
+              printf '%s\t%s\n' "$MAC" "$_safe"; } > "${_lbl_f}.tmp" \
+                && mv "${_lbl_f}.tmp" "$_lbl_f" || true
+            _slug=$(_slugify "$_safe")
+            if [ -n "$_slug" ]; then
+                _hosts_f="/etc/dnsmasq.d/${_iface}-hosts.conf"
+                { grep -v "^dhcp-host=${MAC}," "$_hosts_f" 2>/dev/null
+                  printf 'dhcp-host=%s,%s\n' "$MAC" "$_slug"; } > "${_hosts_f}.tmp" \
+                    && mv "${_hosts_f}.tmp" "$_hosts_f" || true
+                /etc/init.d/dnsmasq reload >/dev/null 2>&1 || true
+            fi
+        fi
+        printf '<meta http-equiv="refresh" content="0;url=/cgi-bin/status">'
+        exit 0
+    fi
 
     _approver_ip="${REMOTE_ADDR:-unknown}"
     _approver_name=$(_name_for_ip "$_approver_ip")
@@ -102,6 +124,10 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
     [ -n "$_approver_mac" ] && _approver="${_approver}, MAC: ${_approver_mac}"
 
     if [ "$_action" = approve ]; then
+        _label_new=$(printf '%s' "$(_get_param "$_params" label)" \
+            | sed 's/+/ /g;s/^[[:space:]]*//;s/[[:space:]]*$//' | head -c 40)
+        _label_safe=$(printf '%s' "$_label_new" | sed "s/[^a-zA-Z0-9 _.'-]//g")
+        [ -n "$_label_safe" ] || { printf '<h1>Label is required to approve a device</h1>'; exit 0; }
         { grep -vF "$MAC" "$APPROVED_FILE" 2>/dev/null; printf '%s\n' "$MAC"; } \
             >"${APPROVED_FILE}.tmp" && mv "${APPROVED_FILE}.tmp" "$APPROVED_FILE" || true
         { grep -v "^${MAC} " "$PENDING_FILE" 2>/dev/null; } \
@@ -128,9 +154,19 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
                 { grep -v "^${MAC}	" "$_ip6_store" 2>/dev/null; printf '%s\t%s\n' "$MAC" "$IP6"; } \
                     >"${_ip6_store}.tmp" && mv "${_ip6_store}.tmp" "$_ip6_store" || true
             fi
-            grep -qF "$MAC" "$_lbl_f" 2>/dev/null \
-                || printf '%s\t%s\n' "$MAC" "$MAC" >> "$_lbl_f"
             setsid sh /etc/extra-networks/_regen-inspect.sh "$NET" >/dev/null 2>&1 &
+        fi
+        _lbl_f="${BASE_DIR}/${NET}-device-labels"
+        { grep -v "^${MAC}	" "$_lbl_f" 2>/dev/null
+          printf '%s\t%s\n' "$MAC" "$_label_safe"; } > "${_lbl_f}.tmp" \
+            && mv "${_lbl_f}.tmp" "$_lbl_f" || true
+        _slug=$(_slugify "$_label_safe")
+        if [ -n "$_slug" ]; then
+            _hosts_f="/etc/dnsmasq.d/${_iface}-hosts.conf"
+            { grep -v "^dhcp-host=${MAC}," "$_hosts_f" 2>/dev/null
+              printf 'dhcp-host=%s,%s\n' "$MAC" "$_slug"; } > "${_hosts_f}.tmp" \
+                && mv "${_hosts_f}.tmp" "$_hosts_f" || true
+            /etc/init.d/dnsmasq reload >/dev/null 2>&1 || true
         fi
         _ntfy "Access approved — ${NET}" default white_check_mark \
 "Type: Internet access approved
@@ -182,6 +218,9 @@ HTML
 fi
 
 # GET: show approval form
+_existing_label=$(awk -v m="$MAC" \
+    'tolower($1)==tolower(m){sub(/^[^\t]+\t/,""); print; exit}' \
+    "${BASE_DIR}/${NET}-device-labels" 2>/dev/null || true)
 cat <<HTML
 <!DOCTYPE html><html><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -190,8 +229,9 @@ cat <<HTML
 body{font-family:system-ui,sans-serif;max-width:480px;margin:4rem auto;padding:1rem;color:#111}
 h1{font-size:1.3rem;margin-bottom:1.5rem}
 .card{background:#f5f5f5;border-radius:8px;padding:1rem;margin:.75rem 0}
-.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:.25rem}
+.lbl{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:.25rem}
 .value{font-weight:600}
+input[type=text]{width:100%;box-sizing:border-box;padding:.5rem .75rem;font-size:1rem;border:1px solid #ccc;border-radius:6px;margin-top:.25rem}
 button{font-size:1rem;padding:.65rem 1rem;border-radius:6px;border:none;cursor:pointer;width:100%;margin-top:.5rem}
 .btn-ok{background:#1976d2;color:#fff}.btn-ok:active{background:#1565c0}
 .btn-deny{background:#c62828;color:#fff}.btn-deny:active{background:#b71c1c}
@@ -199,16 +239,18 @@ button{font-size:1rem;padding:.65rem 1rem;border-radius:6px;border:none;cursor:p
 </style></head><body>
 <h1>Join request — ${NET}</h1>
 <div class="card">
-  <div class="label">Device</div>
+  <div class="lbl">Device</div>
   <div class="value">${_label}</div>
 </div>
 <div class="card">
-  <div class="label">MAC address</div>
+  <div class="lbl">MAC address</div>
   <div class="value">${MAC}</div>
 </div>
-<div class="note">This device joined <strong>${NET}</strong> and is waiting for internet access approval. Approving allows this device; denying keeps it blocked until you approve it later.</div>
+<div class="note">This device joined <strong>${NET}</strong> and is waiting for internet access approval. Give it a label, then approve or deny.</div>
 <form method="POST" action="/cgi-bin/approve-join?${QS}">
   <input type="hidden" name="action" value="approve">
+  <div class="lbl" style="margin-top:1rem">Label <span style="color:#c62828">*</span></div>
+  <input type="text" name="label" value="$(_html "$_existing_label")" placeholder="e.g. Alice's Phone" required maxlength="40">
   <button class="btn-ok" type="submit">Approve internet access</button>
 </form>
 <form method="POST" action="/cgi-bin/approve-join?${QS}">
