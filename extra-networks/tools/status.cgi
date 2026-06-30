@@ -230,6 +230,23 @@ fi
 _domain=$(uci -q get dhcp.@dnsmasq[0].domain 2>/dev/null || true)
 _domain="${_domain:-lan}"
 
+# Pre-scan: determine global column flags so all network tables share the same structure
+_global_hdr_ip6=no
+_global_hdr_join=no
+for _prescan_conf in "${BASE_DIR}"/*-notify.conf; do
+    [ -f "$_prescan_conf" ] || continue
+    _psiface=$(awk -F= '/^IFACE_NAME=/{print $2;exit}' "$_prescan_conf")
+    [ -z "$_psiface" ] && continue
+    [ "$_global_hdr_join" = no ] && \
+        grep -q 'JOIN_APPROVAL=yes' "$_prescan_conf" 2>/dev/null && _global_hdr_join=yes
+    if [ "$_global_hdr_ip6" = no ]; then
+        ip -6 addr show "br-${_psiface}" scope global 2>/dev/null | grep -q inet6 \
+            && _global_hdr_ip6=yes
+        uci -q get dhcp."$_psiface".dhcpv6 2>/dev/null | grep -q server \
+            && _global_hdr_ip6=yes || true
+    fi
+done
+
 for _conf in "${BASE_DIR}"/*-notify.conf; do
     [ -f "$_conf" ] || continue
     unset NOTIFY_URL SUBNET IFACE_NAME BANDWIDTH_THRESHOLD_MB \
@@ -337,13 +354,10 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
         _join_denied="${BASE_DIR}/${_iface}-join-denied"
         _hdr_bw=$([ -n "$_bw_data$_bw_data6" ] && echo yes || echo no)
         _hdr_sig=$([ -n "$_assoc" ] && echo yes || echo no)
-        _hdr_ip6=no
-        [ -n "$_ipv6_prefixes" ] && _hdr_ip6=yes
-        uci -q get dhcp."$_iface".dhcpv6 2>/dev/null | grep -q server && _hdr_ip6=yes || true
 
         printf '<table><tr><th>Label</th><th>DNS</th><th>IPv4</th><th>Joined</th>'
-        [ "$_hdr_ip6" = yes ] && printf '<th>IPv6</th>'
-        [ "${JOIN_APPROVAL:-no}" = yes ] && printf '<th>Join access</th>'
+        [ "$_global_hdr_ip6"   = yes ] && printf '<th>IPv6</th>'
+        [ "$_global_hdr_join"  = yes ] && printf '<th>Join access</th>'
         printf '<th>MAC</th>'
         [ "$_hdr_sig" = yes ] && printf '<th>Signal</th>'
         [ "$_hdr_bw"  = yes ] && printf '<th>Traffic</th>'
@@ -393,8 +407,11 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
             printf '<tr><td>%s</td><td class="dim">%s</td><td>%s</td><td class="dim">%s</td>' \
                 "$_label_cell" "$(_html "$_dns")" \
                 "$([ "$_ip" = "-" ] && echo "—" || _html "$_ip")" "$_joined"
-            [ "$_hdr_ip6" = yes ] && printf '<td class="dim">%s</td>' "${_ipv6:----}"
-            if [ "${JOIN_APPROVAL:-no}" = yes ]; then
+            [ "$_global_hdr_ip6"  = yes ] && printf '<td class="dim">%s</td>' "${_ipv6:----}"
+            if [ "$_global_hdr_join" = yes ]; then
+            if [ "${JOIN_APPROVAL:-no}" != yes ]; then
+                printf '<td class="dim">—</td>'
+            else
                 _join_state="Untracked"
                 grep -qixF "$_mac" "$_join_approved" 2>/dev/null && _join_state="Approved"
                 grep -qixF "$_mac" "$_join_denied" 2>/dev/null && _join_state="Denied"
@@ -420,7 +437,7 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
                     printf '<button class="btn-deny" type="submit">Deny</button></form>'
                 fi
                 printf '</span></td>'
-            fi
+            fi; fi
             printf '<td class="dim"><a href="/cgi-bin/device?net=%s&mac=%s">%s</a></td>' \
                 "$(_html "$_iface")" "$(_html "$_mac")" \
                 "$(_html "$_mac")"
