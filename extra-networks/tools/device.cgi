@@ -484,6 +484,17 @@ if [ -n "$_dhcp_ip" ]; then
 fi
 _networks_row="<div class=\"row\"><span class=\"lbl\">Networks</span><span class=\"val\">${_networks_html}</span></div>"
 
+# Online status via ARP/NDP neighbour table
+_online_cls=dim; _online_text=Offline
+if [ -n "$_DEV_IP" ]; then
+    _ns=$(ip neigh show "$_DEV_IP" dev "br-${_iface}" 2>/dev/null | awk '{print $NF; exit}')
+    case "$_ns" in REACHABLE|DELAY|PROBE) _online_cls=ok; _online_text=Online ;; esac
+fi
+if [ "$_online_text" != Online ] && [ -n "$_DEV_IP6" ]; then
+    _ns=$(ip neigh show "$_DEV_IP6" dev "br-${_iface}" 2>/dev/null | awk '{print $NF; exit}')
+    case "$_ns" in REACHABLE|DELAY|PROBE) _online_cls=ok; _online_text=Online ;; esac
+fi
+
 printf 'Content-Type: text/html\r\n\r\n'
 
 cat <<HTML
@@ -532,6 +543,7 @@ input[type=text],input[type=number]{font-size:.875rem;padding:.3rem .5rem;
 <h2>Device</h2>
 <div class="card">
 <div class="row"><span class="lbl">MAC</span><span class="val">$(_html "$MAC")</span></div>
+<div class="row"><span class="lbl">Online</span><span class="val ${_online_cls}">${_online_text}</span></div>
 <div class="row"><span class="lbl">Tracked IPv4</span><span class="val">${_DEV_IP:----}</span></div>
 <div class="row"><span class="lbl">Tracked IPv6</span><span class="val">${_DEV_IP6:----}</span></div>
 <div class="row"><span class="lbl">Network</span><span class="val">$(_html "$_iface")</span></div>

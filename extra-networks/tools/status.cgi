@@ -269,6 +269,10 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
     # IPv6 neighbour table for this bridge: MAC → global/ULA address (skip link-local)
     _neigh6=$(ip -6 neigh show dev "br-${_iface}" 2>/dev/null \
         | awk '!/^fe80:/ && /lladdr/{for(i=1;i<=NF;i++) if($i=="lladdr"){print $(i+1)"\t"$1; break}}')
+    # ARP/NDP state table: IP → kernel reachability state
+    _neigh_states=$({ ip neigh show dev "br-${_iface}" 2>/dev/null
+                      ip -6 neigh show dev "br-${_iface}" 2>/dev/null; } \
+        | awk '!/^fe80:/{print $1"\t"$NF}')
 
     _devs=$(
         awk -v s="${SUBNET}." '$3~s{print $4"\t"$3"\t"$2"\t"$1}' /tmp/dhcp.leases 2>/dev/null
@@ -355,7 +359,7 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
         _hdr_bw=$([ -n "$_bw_data$_bw_data6" ] && echo yes || echo no)
         _hdr_sig=$([ -n "$_assoc" ] && echo yes || echo no)
 
-        printf '<table><tr><th>Label</th><th>DNS</th><th>IPv4</th><th>Joined</th>'
+        printf '<table><tr><th style="width:1.5rem;text-align:center;padding:.45rem .15rem"></th><th>Label</th><th>DNS</th><th>IPv4</th><th>Joined</th>'
         [ "$_global_hdr_ip6"   = yes ] && printf '<th>IPv6</th>'
         [ "$_global_hdr_join"  = yes ] && printf '<th>Join access</th>'
         printf '<th>MAC</th>'
@@ -372,6 +376,12 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
             # Always resolve IPv6 — used for both the column and bw6 lookup
             _ipv6=$(printf '%s\n' "$_neigh6" \
                 | awk -v m="$_mac" 'tolower($1)==tolower(m){print $2; exit}')
+
+            _online_cls=dim
+            _ns=$(printf '%s\n' "$_neigh_states" | awk -v ip="$_ip" '$1==ip{print $2;exit}')
+            [ -z "$_ns" ] && [ -n "$_ipv6" ] && \
+                _ns=$(printf '%s\n' "$_neigh_states" | awk -v ip="$_ipv6" '$1==ip{print $2;exit}')
+            case "$_ns" in REACHABLE|DELAY|PROBE) _online_cls=ok ;; esac
 
             _bw=""
             if [ "$_hdr_bw" = yes ]; then
@@ -402,7 +412,9 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
                 _label_cell=$(printf '<form method="POST" action="/cgi-bin/approve-join" style="margin:0"><input type="hidden" name="net" value="%s"><input type="hidden" name="mac" value="%s"><input type="hidden" name="action" value="set_label"><input type="text" name="label" placeholder="Add label" maxlength="40" style="padding:.2rem .35rem;border:1px solid #ccc;border-radius:3px;font-size:.8rem"><button type="submit" style="margin-left:.2rem">Save</button></form>' \
                     "$(_html "$_iface")" "$(_html "$_mac")")
             fi
-            printf '<tr><td>%s</td><td class="dim">%s</td><td>%s</td><td class="dim">%s</td>' \
+            printf '<tr><td class="%s" style="text-align:center;padding:.5rem .15rem">%s</td>' \
+                "$_online_cls" "$([ "$_online_cls" = ok ] && printf '●' || printf '○')"
+            printf '<td>%s</td><td class="dim">%s</td><td>%s</td><td class="dim">%s</td>' \
                 "$_label_cell" "$(_html "$_dns")" \
                 "$([ "$_ip" = "-" ] && echo "—" || _html "$_ip")" "$_joined"
             [ "$_global_hdr_ip6"  = yes ] && printf '<td class="dim">%s</td>' "${_ipv6:----}"
