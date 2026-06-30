@@ -412,7 +412,7 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
                 _label_cell=$(printf '<form method="POST" action="/cgi-bin/approve-join" style="margin:0"><input type="hidden" name="net" value="%s"><input type="hidden" name="mac" value="%s"><input type="hidden" name="action" value="set_label"><input type="text" name="label" placeholder="Add label" maxlength="40" style="padding:.2rem .35rem;border:1px solid #ccc;border-radius:3px;font-size:.8rem"><button type="submit" style="margin-left:.2rem">Save</button></form>' \
                     "$(_html "$_iface")" "$(_html "$_mac")")
             fi
-            printf '<tr><td style="text-align:center;padding:.5rem .15rem"><span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:%s"></span></td>' \
+            printf '<tr><td style="text-align:center;padding:.5rem .15rem"><span style="display:inline-block;width:11px;height:11px;border-radius:50%%;background:%s"></span></td>' \
                 "$([ "$_online_cls" = ok ] && printf '#2e7d32' || printf '#ccc')"
             printf '<td>%s</td><td class="dim">%s</td><td>%s</td><td class="dim">%s</td>' \
                 "$_label_cell" "$(_html "$_dns")" \
