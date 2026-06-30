@@ -543,7 +543,7 @@ input[type=text],input[type=number]{font-size:.875rem;padding:.3rem .5rem;
 <h2>Device</h2>
 <div class="card">
 <div class="row"><span class="lbl">MAC</span><span class="val">$(_html "$MAC")</span></div>
-<div class="row"><span class="lbl">Online</span><span class="val ${_online_cls}">${_online_text}</span></div>
+<div class="row"><span class="lbl">Online</span><span class="val ${_online_cls}"><span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:$([ "$_online_cls" = ok ] && printf '#2e7d32' || printf '#ccc');margin-right:.35rem;vertical-align:middle"></span>${_online_text}</span></div>
 <div class="row"><span class="lbl">Tracked IPv4</span><span class="val">${_DEV_IP:----}</span></div>
 <div class="row"><span class="lbl">Tracked IPv6</span><span class="val">${_DEV_IP6:----}</span></div>
 <div class="row"><span class="lbl">Network</span><span class="val">$(_html "$_iface")</span></div>

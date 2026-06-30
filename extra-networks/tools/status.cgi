@@ -359,7 +359,7 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
         _hdr_bw=$([ -n "$_bw_data$_bw_data6" ] && echo yes || echo no)
         _hdr_sig=$([ -n "$_assoc" ] && echo yes || echo no)
 
-        printf '<table><tr><th style="width:1.5rem;text-align:center;padding:.45rem .15rem"></th><th>Label</th><th>DNS</th><th>IPv4</th><th>Joined</th>'
+        printf '<table><tr><th style="width:2rem;text-align:center;padding:.45rem .15rem"></th><th>Label</th><th>DNS</th><th>IPv4</th><th>Joined</th>'
         [ "$_global_hdr_ip6"   = yes ] && printf '<th>IPv6</th>'
         [ "$_global_hdr_join"  = yes ] && printf '<th>Join access</th>'
         printf '<th>MAC</th>'
@@ -412,8 +412,8 @@ for _conf in "${BASE_DIR}"/*-notify.conf; do
                 _label_cell=$(printf '<form method="POST" action="/cgi-bin/approve-join" style="margin:0"><input type="hidden" name="net" value="%s"><input type="hidden" name="mac" value="%s"><input type="hidden" name="action" value="set_label"><input type="text" name="label" placeholder="Add label" maxlength="40" style="padding:.2rem .35rem;border:1px solid #ccc;border-radius:3px;font-size:.8rem"><button type="submit" style="margin-left:.2rem">Save</button></form>' \
                     "$(_html "$_iface")" "$(_html "$_mac")")
             fi
-            printf '<tr><td class="%s" style="text-align:center;padding:.5rem .15rem">%s</td>' \
-                "$_online_cls" "$([ "$_online_cls" = ok ] && printf '●' || printf '○')"
+            printf '<tr><td style="text-align:center;padding:.5rem .15rem"><span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:%s"></span></td>' \
+                "$([ "$_online_cls" = ok ] && printf '#2e7d32' || printf '#ccc')"
             printf '<td>%s</td><td class="dim">%s</td><td>%s</td><td class="dim">%s</td>' \
                 "$_label_cell" "$(_html "$_dns")" \
                 "$([ "$_ip" = "-" ] && echo "—" || _html "$_ip")" "$_joined"
